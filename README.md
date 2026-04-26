@@ -1,3 +1,17 @@
+# Customized fork of rsspls
+## TODO
+
+- [ ] switch to GitHub Actions
+- [ ] bump to latest dependencies / latest rust
+- [ ] switch to `scraper` for better selector support
+- [ ] add update hooks
+- [ ] use default link select `[href]` or maybe `a[href], area[href], link[href]`
+- [ ] use URL from root item if it has `href` attribute
+- [ ] Support parsing JSON endpoints with JSONPath
+
+---
+---
+
 <h1 align="center">
   <img src="feed-icon.svg" width="48" alt=""><br>
   RSS Please
