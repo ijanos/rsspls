@@ -1,7 +1,7 @@
 # Customized fork of rsspls
 ## TODO
 
-- [ ] switch to GitHub Actions
+- [x] switch to GitHub Actions
 - [ ] bump to latest dependencies / latest rust
 - [ ] switch to `scraper` for better selector support
 - [ ] add update hooks
