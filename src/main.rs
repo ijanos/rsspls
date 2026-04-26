@@ -21,7 +21,7 @@ use std::{env, fs};
 use atomicwrites::AtomicFile;
 use eyre::{eyre, Report, WrapErr};
 use futures::future;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, warn, LevelFilter};
 use reqwest::Client as HttpClient;
 use rss::Channel;
 use simple_eyre::eyre;
@@ -56,10 +56,10 @@ async fn main() -> ExitCode {
 
 async fn try_main() -> eyre::Result<bool> {
     simple_eyre::install()?;
-    if env::var_os(RSSPLS_LOG).is_none() {
-        env::set_var(RSSPLS_LOG, "info")
-    }
-    pretty_env_logger::try_init_custom_env(RSSPLS_LOG)?;
+    let mut logger = pretty_env_logger::formatted_builder();
+    logger.filter_level(LevelFilter::Info);
+    logger.parse_env(RSSPLS_LOG);
+    logger.try_init()?;
 
     let cli = cli::parse_args().wrap_err("unable to parse CLI arguments")?;
     let cli = match cli {
