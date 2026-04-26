@@ -8,7 +8,7 @@ use basic_toml as toml;
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use eyre::WrapErr;
 use log::{debug, warn};
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use simple_eyre::eyre;
 use time::format_description::OwnedFormatItem;
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
@@ -325,9 +325,11 @@ mod tests {
 
     #[test]
     fn test_with_date_format() {
-        assert!(test_date("[day padding:none]/[month padding:none]/[year]")
-            .parse("1/2/1945")
-            .is_ok());
+        assert!(
+            test_date("[day padding:none]/[month padding:none]/[year]")
+                .parse("1/2/1945")
+                .is_ok()
+        );
         assert!(test_date("[weekday case_sensitive:false], [month repr:long case_sensitive:false] [day padding:none][first [st][nd][rd][th]], [year]")
             .parse("Friday, January 8th, 2021").is_ok());
         assert!(test_date("[weekday case_sensitive:false], [month repr:long case_sensitive:false] [day padding:none], [year]")

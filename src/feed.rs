@@ -8,15 +8,15 @@ use mime_guess::mime;
 use reqwest::header::HeaderMap;
 use reqwest::{RequestBuilder, StatusCode};
 use rss::{Channel, ChannelBuilder, EnclosureBuilder, GuidBuilder, Item, ItemBuilder};
-use simple_eyre::eyre::{self, bail, eyre, WrapErr};
-use time::format_description::well_known::Rfc2822;
+use simple_eyre::eyre::{self, WrapErr, bail, eyre};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc2822;
 use tokio::task;
 use url::Url;
 
+use crate::Client;
 use crate::cache::RequestCacheWrite;
 use crate::config::{ChannelConfig, ConfigHash, DateConfig, FeedConfig};
-use crate::Client;
 
 #[derive(Debug)]
 pub enum ProcessResult {
@@ -666,8 +666,9 @@ mod tests {
             panic!("expected error, got: {:?}", res)
         };
 
-        assert!(err
-            .to_string()
-            .contains("file URLs are not enabled in config"));
+        assert!(
+            err.to_string()
+                .contains("file URLs are not enabled in config")
+        );
     }
 }

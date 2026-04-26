@@ -19,9 +19,9 @@ use std::time::Duration;
 use std::{env, fs};
 
 use atomicwrites::AtomicFile;
-use eyre::{eyre, Report, WrapErr};
+use eyre::{Report, WrapErr, eyre};
 use futures::future;
-use log::{debug, error, info, warn, LevelFilter};
+use log::{LevelFilter, debug, error, info, warn};
 use reqwest::Client as HttpClient;
 use rss::Channel;
 use simple_eyre::eyre;
@@ -30,7 +30,7 @@ use crate::cache::deserialise_cached_headers;
 use crate::config::ConfigHash;
 use crate::config::{ChannelConfig, Config};
 use crate::dirs::Dirs;
-use crate::feed::{process_feed, ProcessResult};
+use crate::feed::{ProcessResult, process_feed};
 
 const RSSPLS_LOG: &str = "RSSPLS_LOG";
 
@@ -248,7 +248,11 @@ async fn run_hook(hook: &[String], feed_path: &Path) -> eyre::Result<()> {
     if !output.status.success() {
         warn!(
             "post-update hook for '{}' exited with non-zero status.\ncmd: {}, status: {}'\nstdout: {}\nstderr: {}",
-            feed_path.display(), cmd, output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr),
+            feed_path.display(),
+            cmd,
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
         );
     }
     Ok(())
@@ -350,9 +354,11 @@ mod tests {
         ];
 
         run_hook(&hook, &feed).await.unwrap();
-        assert!(fs::read_to_string(&marker)
-            .unwrap()
-            .contains(feed.to_str().unwrap()));
+        assert!(
+            fs::read_to_string(&marker)
+                .unwrap()
+                .contains(feed.to_str().unwrap())
+        );
     }
 
     #[tokio::test]
