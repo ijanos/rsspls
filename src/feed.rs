@@ -434,17 +434,91 @@ mod tests {
     }
 
     fn test_date(format: &str) -> DateConfig {
-        toml::from_str(&format!("selector = \"\"\nformat = {:?}", format)).unwrap()
+        test_date_with_selector("", format)
     }
+
+    fn test_date_with_selector(selector: &str, format: &str) -> DateConfig {
+        toml::from_str(&format!("selector = {:?}\nformat = {:?}", selector, format)).unwrap()
+    }
+
+    const HUNGARIAN_FORMAT: &str =
+        "[year]. [month]. [day]. [hour]:[minute][end trailing_input:discard]";
 
     #[test]
     fn test_date_hungarian_style() {
-        let date = test_date("[year]. [month]. [day]. [hour]:[minute][end trailing_input:discard]");
+        let date = test_date(HUNGARIAN_FORMAT);
         assert!(date.parse("2024. 03. 15. 09:45").is_ok());
         assert!(date.parse("2024. 03. 15. 09:45 some trailing text").is_ok());
         assert!(date.parse("1999. 12. 31. 23:59").is_ok());
     }
 
+    #[test]
+    fn test_process_local_html_hungarian_date() {
+        let html = r#"<html><body>
+            <article class="post">
+                <h2><a href="/post/1">First Post</a></h2>
+                <span class="date">2024. 03. 15. 09:45</span>
+            </article>
+            <article class="post">
+                <h2><a href="/post/2">Second Post</a></h2>
+                <span class="date">1999. 12. 31. 23:59 - trailing content</span>
+            </article>
+        </body></html>"#;
+
+        let html_file_name = format!("rsspls.local.hungarian.{}.html", process::id());
+        let local_html = RmOnDrop::new(env::temp_dir().join(&html_file_name));
+        fs::write(local_html.path(), html.as_bytes()).expect("unable to write test HTML");
+
+        let url = Url::from_file_path(local_html.path())
+            .expect("unable to construct file URL for test HTML");
+
+        let client = Client {
+            file_urls: true,
+            http: HttpClient::new(),
+        };
+
+        let config = FeedConfig {
+            url: url.to_string(),
+            item: "article.post".to_string(),
+            heading: "h2".to_string(),
+            link: Some("a".to_string()),
+            date: Some(test_date_with_selector(".date", HUNGARIAN_FORMAT)),
+            ..test_config()
+        };
+        let channel_config = ChannelConfig {
+            title: "Site".to_string(),
+            filename: Path::new(&html_file_name)
+                .with_extension("rss")
+                .to_string_lossy()
+                .into_owned(),
+            user_agent: None,
+            config,
+        };
+        let config_hash = ConfigHash(&html_file_name);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = runtime
+            .block_on(process_feed(&client, &channel_config, config_hash, &None))
+            .expect("unable to process local feed");
+
+        let ProcessResult::Ok { channel, .. } = res else {
+            panic!("expected ProcessResult::Ok but got: {:?}", res)
+        };
+
+        assert_eq!(channel.items().len(), 2);
+        assert_eq!(channel.items()[0].title, Some("First Post".to_string()));
+        assert_eq!(
+            channel.items()[0].pub_date,
+            Some("Fri, 15 Mar 2024 09:45:00 +0000".to_string())
+        );
+        assert_eq!(channel.items()[1].title, Some("Second Post".to_string()));
+        assert_eq!(
+            channel.items()[1].pub_date,
+            Some("Fri, 31 Dec 1999 23:59:00 +0000".to_string())
+        );
+    }
 
     #[test]
     fn test_trim_date() {
