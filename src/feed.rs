@@ -433,6 +433,19 @@ mod tests {
         }
     }
 
+    fn test_date(format: &str) -> DateConfig {
+        toml::from_str(&format!("selector = \"\"\nformat = {:?}", format)).unwrap()
+    }
+
+    #[test]
+    fn test_date_hungarian_style() {
+        let date = test_date("[year]. [month]. [day]. [hour]:[minute][end trailing_input:discard]");
+        assert!(date.parse("2024. 03. 15. 09:45").is_ok());
+        assert!(date.parse("2024. 03. 15. 09:45 some trailing text").is_ok());
+        assert!(date.parse("1999. 12. 31. 23:59").is_ok());
+    }
+
+
     #[test]
     fn test_trim_date() {
         assert_eq!(trim_date("2021-05-20 —"), "2021-05-20");
