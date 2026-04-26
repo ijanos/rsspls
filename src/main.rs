@@ -56,9 +56,8 @@ async fn main() -> ExitCode {
 
 async fn try_main() -> eyre::Result<bool> {
     simple_eyre::install()?;
-    match env::var_os(RSSPLS_LOG) {
-        None => env::set_var(RSSPLS_LOG, "info"),
-        Some(_) => {}
+    if env::var_os(RSSPLS_LOG).is_none() {
+        env::set_var(RSSPLS_LOG, "info")
     }
     pretty_env_logger::try_init_custom_env(RSSPLS_LOG)?;
 
