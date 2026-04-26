@@ -2,9 +2,9 @@
 ## TODO
 
 - [x] switch to GitHub Actions
-- [ ] bump to latest dependencies / latest rust
+- [x] bump to latest dependencies / latest rust
+- [x] add update hooks
 - [ ] switch to `scraper` for better selector support
-- [ ] add update hooks
 - [ ] use default link select `[href]` or maybe `a[href], area[href], link[href]`
 - [ ] use URL from root item if it has `href` attribute
 - [ ] Support parsing JSON endpoints with JSONPath
