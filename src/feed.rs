@@ -580,6 +580,63 @@ mod tests {
         assert_eq!(description, "<span>two</span><p>one</p>");
     }
 
+    // needs :has css selector support
+    #[ignore]
+    #[test]
+    fn test_advanced_css_selectors() {
+        let html = r#"<html><body>
+            <div id="d1"><h1>Title 1</h1></div>
+            <div id="d2"><p>Only paragraph</p></div>
+            <div id="d3"></div>
+            <div id="d4"><h1>Title 2</h1></div>
+            <div id="d5"><span>No title</span></div>
+        </body></html>"#;
+
+        let html_file_name = format!("rsspls.advanced-css.{}.html", process::id());
+        let local_html = RmOnDrop::new(env::temp_dir().join(&html_file_name));
+        fs::write(local_html.path(), html.as_bytes()).expect("unable to write test HTML");
+
+        let url = Url::from_file_path(local_html.path())
+            .expect("unable to construct file URL for test HTML");
+
+        let client = Client {
+            file_urls: true,
+            http: HttpClient::new(),
+        };
+
+        let config = FeedConfig {
+            url: url.to_string(),
+            item: "div:has(h1)".to_string(),
+            heading: "h1".to_string(),
+            link: Some("h1".to_string()),
+            ..test_config()
+        };
+        let channel_config = ChannelConfig {
+            title: "Advanced CSS".to_string(),
+            filename: Path::new(&html_file_name)
+                .with_extension("rss")
+                .to_string_lossy()
+                .into_owned(),
+            user_agent: None,
+            post_update_hook: vec![],
+            config,
+        };
+        let config_hash = ConfigHash(&html_file_name);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = runtime
+            .block_on(process_feed(&client, &channel_config, config_hash, &None))
+            .expect("unable to process local feed");
+
+        let ProcessResult::Ok { channel, .. } = res else {
+            panic!("expected ProcessResult::Ok but got: {:?}", res)
+        };
+
+        assert_eq!(channel.items().len(), 2);
+    }
+
     #[test]
     fn test_process_local_html() {
         let html_file_name = format!("rsspls.local.{}.html", process::id());
