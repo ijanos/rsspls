@@ -78,7 +78,7 @@ pub async fn process_feed(
     let channel = ChannelBuilder::default()
         .title(&channel_config.title)
         .link(url.to_string())
-        .generator(Some(crate::version_string()))
+        .generator(Some(crate::version_string().to_string()))
         .items(items)
         .build();
 

@@ -271,11 +271,15 @@ fn write_channel(channel: &Channel, output_path: &Path) -> Result<(), Report> {
 }
 
 #[must_use]
-pub fn version_string() -> String {
-    format!("{} version {}", env!("CARGO_PKG_NAME"), version())
+pub fn version_string() -> &'static str {
+    concat!(
+        env!("CARGO_PKG_NAME"),
+        " version ",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
-fn version() -> &'static str {
+const fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
