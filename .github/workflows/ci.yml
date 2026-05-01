@@ -77,3 +77,18 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+  container:
+    name: Build Container Image
+    needs: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build container image
+        run: docker build -f Containerfile -t rsspls:ci .
+
+      - name: Smoke test image entrypoint
+        run: docker run --rm rsspls:ci --help
