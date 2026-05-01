@@ -1,14 +1,13 @@
 use std::fs;
 
 use basic_toml as toml;
-use kuchiki::traits::TendrilSink;
-use kuchiki::{ElementData, NodeDataRef};
 use log::{debug, error, info, warn};
 use lol_html::{RewriteStrSettings, element, rewrite_str};
 use mime_guess::mime;
 use reqwest::header::HeaderMap;
 use reqwest::{RequestBuilder, StatusCode};
 use rss::{Channel, ChannelBuilder, EnclosureBuilder, GuidBuilder, Item, ItemBuilder};
+use scraper::{ElementRef, Html, Selector};
 use simple_eyre::eyre::{self, WrapErr, bail, eyre};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc2822;
@@ -57,14 +56,13 @@ pub async fn process_feed(
 
     let link_selector = config.link.as_ref().unwrap_or(&config.heading);
 
-    let doc = kuchiki::parse_html().one(html);
+    let doc = Html::parse_document(&html);
+    let item_selector = Selector::parse(&config.item)
+        .map_err(|_| eyre!("invalid selector for item: {}", config.item))?;
     let base_url = Url::options().base_url(Some(&url));
 
     let mut items = Vec::new();
-    for item in doc
-        .select(&config.item)
-        .map_err(|()| eyre!("invalid selector for item: {}", config.item))?
-    {
+    for item in doc.select(&item_selector) {
         match process_item(config, item, link_selector, &base_url) {
             Ok(rss_item) => items.push(rss_item),
             Err(err) => {
@@ -195,25 +193,29 @@ async fn fetch_webpage_local(url: &Url) -> eyre::Result<FetchResult> {
 
 fn process_item(
     config: &FeedConfig,
-    item: NodeDataRef<ElementData>,
+    item: ElementRef<'_>,
     link_selector: &str,
     base_url: &url::ParseOptions,
 ) -> eyre::Result<Item> {
-    let title = item
-        .as_node()
-        .select_first(&config.heading)
-        .map_err(|()| eyre!("invalid selector for heading: {}", config.heading))?;
-    let link = item
-        .as_node()
-        .select_first(link_selector)
-        .map_err(|()| eyre!("invalid selector for link: {}", link_selector))?;
+    let heading_selector = Selector::parse(&config.heading)
+        .map_err(|_| eyre!("invalid selector for heading: {}", config.heading))?;
+    let title = select_first_including_self(item, &heading_selector).ok_or_else(|| {
+        eyre!(
+            "heading selector did not match anything: {}",
+            config.heading
+        )
+    })?;
+    let link_selector = Selector::parse(link_selector)
+        .map_err(|_| eyre!("invalid selector for link: {}", link_selector))?;
+    let link = select_first_including_self(item, &link_selector)
+        .ok_or_else(|| eyre!("link selector did not match anything"))?;
     // Keep the previous global href-rewrite behaviour without mutating the DOM.
-    let attrs = link.attributes.borrow();
-    let link_url = attrs
-        .get("href")
+    let link_url = link
+        .value()
+        .attr("href")
         .map(|href| rewrite_href_value(href, base_url))
         .ok_or_else(|| eyre!("element selected as link has no 'href' attribute"))?;
-    let title_text = title.text_contents();
+    let title_text = link_text(&title);
     let description = extract_description(config, &item, &title_text, base_url)?;
     let date = extract_pub_date(config, &item)?;
     let guid = GuidBuilder::default()
@@ -232,15 +234,15 @@ fn process_item(
     // Media enclosure
     if let Some(media_selector) = &config.media {
         debug!("checking for media matching {media_selector}");
-        let media = item
-            .as_node()
-            .select_first(media_selector)
-            .map_err(|()| eyre!("invalid selector for media: {}", media_selector))?;
+        let media_selector = Selector::parse(media_selector)
+            .map_err(|_| eyre!("invalid selector for media: {}", media_selector))?;
+        let media = select_first_including_self(item, &media_selector)
+            .ok_or_else(|| eyre!("media selector did not match anything"))?;
 
-        let media_attrs = media.attributes.borrow();
-        let media_url = media_attrs
-            .get("src")
-            .or_else(|| media_attrs.get("href"))
+        let media_url = media
+            .value()
+            .attr("src")
+            .or_else(|| media.value().attr("href"))
             .ok_or_else(|| eyre!("element selected as media has no 'src' or 'href' attribute"))?;
 
         let parsed_url = base_url
@@ -321,25 +323,24 @@ fn add_headers(
 
 fn extract_pub_date(
     config: &FeedConfig,
-    item: &NodeDataRef<ElementData>,
+    item: &ElementRef<'_>,
 ) -> eyre::Result<Option<OffsetDateTime>> {
     config
         .date
         .as_ref()
         .map(|date| {
-            item.as_node()
-                .select_first(date.selector())
-                .map_err(|()| eyre!("invalid selector for date: {}", date.selector()))
-                .map(|node| parse_date(date, &node))
+            let date_selector = Selector::parse(date.selector())
+                .map_err(|_| eyre!("invalid selector for date: {}", date.selector()))?;
+            Ok(select_first_including_self(*item, &date_selector)
+                .and_then(|node| parse_date(date, &node)))
         })
         .transpose()
         .map(Option::flatten)
 }
 
-fn parse_date(date: &DateConfig, node: &NodeDataRef<ElementData>) -> Option<OffsetDateTime> {
-    let attrs = node.attributes.borrow();
-    (&node.name.local == "time")
-        .then(|| attrs.get("datetime"))
+fn parse_date(date: &DateConfig, node: &ElementRef<'_>) -> Option<OffsetDateTime> {
+    (node.value().name() == "time")
+        .then(|| node.value().attr("datetime"))
         .flatten()
         .and_then(|datetime| {
             debug!("trying datetime attribute");
@@ -349,7 +350,7 @@ fn parse_date(date: &DateConfig, node: &NodeDataRef<ElementData>) -> Option<Offs
             debug!("using datetime attribute");
         })
         .or_else(|| {
-            let text = node.text_contents();
+            let text = link_text(node);
             let text = trim_date(&text);
             date.parse(text)
                 .map_err(|_err| {
@@ -364,37 +365,53 @@ fn trim_date(s: &str) -> &str {
     s.trim_matches(|c: char| !c.is_alphanumeric())
 }
 
+fn link_text(node: &ElementRef<'_>) -> String {
+    node.text().collect()
+}
+
+fn select_first_including_self<'a>(
+    element: ElementRef<'a>,
+    selector: &Selector,
+) -> Option<ElementRef<'a>> {
+    if selector.matches(&element) {
+        Some(element)
+    } else {
+        element.select(selector).next()
+    }
+}
+
+fn select_including_self<'a>(element: ElementRef<'a>, selector: &Selector) -> Vec<ElementRef<'a>> {
+    let mut elements = Vec::new();
+    if selector.matches(&element) {
+        elements.push(element);
+    }
+    elements.extend(element.select(selector));
+    elements
+}
+
 fn extract_description(
     config: &FeedConfig,
-    item: &NodeDataRef<ElementData>,
+    item: &ElementRef<'_>,
     title: &str,
     base_url: &url::ParseOptions,
 ) -> eyre::Result<Option<String>> {
     let mut description = String::new();
 
     for selector in &config.summary {
-        let nodes = item
-            .as_node()
-            .select(selector)
-            .map_err(|()| {
+        let selector = Selector::parse(selector)
+            .map_err(|_| {
                 warn!(
-                    "summary selector '{selector}' for item with title '{}' did not match anything",
+                    "summary selector '{selector}' for item with title '{}' is invalid",
                     title.trim()
                 )
             })
             .ok();
-        let Some(nodes) = nodes else {
+        let Some(selector) = selector else {
             continue;
         };
 
-        for node in nodes {
-            let mut node_html = Vec::new();
-            node.as_node()
-                .serialize(&mut node_html)
-                .wrap_err("unable to serialise description")?;
-            // NOTE(unwrap): Should be safe as HTML has to be legit Unicode.
-            let node_html = String::from_utf8(node_html).unwrap();
-            description.push_str(&rewrite_hrefs_in_html(&node_html, base_url)?);
+        for node in select_including_self(*item, &selector) {
+            description.push_str(&rewrite_hrefs_in_html(&node.html(), base_url)?);
         }
     }
 
@@ -554,11 +571,92 @@ mod tests {
     }
 
     #[test]
+    fn test_process_item_normalizes_link_and_guid() {
+        let html = r#"<html><body><article class="post"><h2><a href="/post/1">First Post</a></h2></article></body></html>"#;
+        let doc = Html::parse_document(html);
+        let item_selector = Selector::parse("article.post").unwrap();
+        let item = doc.select(&item_selector).next().unwrap();
+        let config = FeedConfig {
+            heading: "h2".to_string(),
+            link: Some("a".to_string()),
+            ..test_config()
+        };
+        let base_url = "http://example.com".parse().unwrap();
+        let base = Url::options().base_url(Some(&base_url));
+
+        let rss_item = process_item(&config, item, "a", &base).unwrap();
+
+        assert_eq!(rss_item.link.as_deref(), Some("http://example.com/post/1"));
+        assert_eq!(
+            rss_item.guid.as_ref().map(|guid| guid.value()),
+            Some("http://example.com/post/1")
+        );
+    }
+
+    #[test]
+    fn test_extract_description_rewrites_hrefs_to_absolute_urls() {
+        let html = r#"<html><body><article class="item"><p class="summary">Read <a href="/more">more</a></p></article></body></html>"#;
+        let doc = Html::parse_document(html);
+        let item_selector = Selector::parse(".item").unwrap();
+        let item = doc.select(&item_selector).next().unwrap();
+        let config = FeedConfig {
+            summary: vec![".summary".to_string()],
+            ..test_config()
+        };
+        let base_url = "http://example.com".parse().unwrap();
+        let base = Url::options().base_url(Some(&base_url));
+
+        let description = extract_description(&config, &item, "title", &base)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            description,
+            r#"<p class="summary">Read <a href="http://example.com/more">more</a></p>"#
+        );
+    }
+
+    #[test]
+    fn test_extract_description_leaves_src_attributes_unchanged() {
+        let html = r#"<html><body><article class="item"><p class="summary"><img src="/image.jpg"><a href="/more">more</a></p></article></body></html>"#;
+        let doc = Html::parse_document(html);
+        let item_selector = Selector::parse(".item").unwrap();
+        let item = doc.select(&item_selector).next().unwrap();
+        let config = FeedConfig {
+            summary: vec![".summary".to_string()],
+            ..test_config()
+        };
+        let base_url = "http://example.com".parse().unwrap();
+        let base = Url::options().base_url(Some(&base_url));
+
+        let description = extract_description(&config, &item, "title", &base)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            description,
+            r#"<p class="summary"><img src="/image.jpg"><a href="http://example.com/more">more</a></p>"#
+        );
+    }
+
+    #[test]
+    fn test_rewrite_hrefs_in_html_leaves_invalid_hrefs_unchanged() {
+        let html = r#"<p><a href="http://[::1">broken</a></p>"#;
+        let base_url = "http://example.com".parse().unwrap();
+        let base = Url::options().base_url(Some(&base_url));
+
+        let rewritten = rewrite_hrefs_in_html(html, &base).unwrap();
+
+        assert_eq!(rewritten, html);
+    }
+
+    #[test]
     fn test_extract_description_multi() {
         // Test CSS selector for description that matches multiple elements
         let html = r#"<html><body><div class="item"><p>one</p><span>two</span></body></html>"#;
-        let doc = kuchiki::parse_html().one(html);
-        let item = doc.select_first(".item").unwrap();
+        let doc = Html::parse_document(html);
+        let item_selector = Selector::parse(".item").unwrap();
+        let item = doc.select(&item_selector).next().unwrap();
         let config = FeedConfig {
             summary: vec!["span, p".to_string()],
             ..test_config()
@@ -578,8 +676,9 @@ mod tests {
     fn test_extract_description_array() {
         // Test CSS selector for description that matches multiple elements
         let html = r#"<html><body><div class="item"><p>one</p><span>two</span></body></html>"#;
-        let doc = kuchiki::parse_html().one(html);
-        let item = doc.select_first(".item").unwrap();
+        let doc = Html::parse_document(html);
+        let item_selector = Selector::parse(".item").unwrap();
+        let item = doc.select(&item_selector).next().unwrap();
         let config = FeedConfig {
             summary: vec!["span".to_string(), "p".to_string()],
             ..test_config()
@@ -595,15 +694,13 @@ mod tests {
         assert_eq!(description, "<span>two</span><p>one</p>");
     }
 
-    // needs :has css selector support
-    #[ignore]
     #[test]
     fn test_advanced_css_selectors() {
         let html = r#"<html><body>
-            <div id="d1"><h1>Title 1</h1></div>
+            <div id="d1"><h1><a href="/title-1">Title 1</a></h1></div>
             <div id="d2"><p>Only paragraph</p></div>
             <div id="d3"></div>
-            <div id="d4"><h1>Title 2</h1></div>
+            <div id="d4"><h1><a href="/title-2">Title 2</a></h1></div>
             <div id="d5"><span>No title</span></div>
         </body></html>"#;
 
@@ -623,7 +720,7 @@ mod tests {
             url: url.to_string(),
             item: "div:has(h1)".to_string(),
             heading: "h1".to_string(),
-            link: Some("h1".to_string()),
+            link: Some("h1 a".to_string()),
             ..test_config()
         };
         let channel_config = ChannelConfig {
