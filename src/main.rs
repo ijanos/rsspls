@@ -48,7 +48,7 @@ async fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(report) => {
-            error!("{:?}", report);
+            error!("{report:?}");
             ExitCode::FAILURE
         }
     }
@@ -62,10 +62,9 @@ async fn try_main() -> eyre::Result<bool> {
     logger.try_init()?;
 
     let cli = cli::parse_args().wrap_err("unable to parse CLI arguments")?;
-    let cli = match cli {
-        Some(cli) => cli,
+    let Some(cli) = cli else {
         // Help or version info was printed and we should return
-        None => return Ok(true),
+        return Ok(true);
     };
 
     let config = Config::read(cli.config_path)?;
@@ -106,22 +105,19 @@ async fn try_main() -> eyre::Result<bool> {
         .timeout(timeout);
 
     // Add proxy if provided
-    match config.rsspls.proxy {
-        Some(proxy) => {
-            debug!("using proxy from configuration file: {}", proxy);
-            client_builder = client_builder.proxy(reqwest::Proxy::all(proxy)?)
+    if let Some(proxy) = config.rsspls.proxy {
+        debug!("using proxy from configuration file: {proxy}");
+        client_builder = client_builder.proxy(reqwest::Proxy::all(proxy)?);
+    } else {
+        if let Ok(proxy) = env::var("http_proxy") {
+            debug!("using http proxy from 'http_proxy' env var: {proxy}");
+            client_builder = client_builder.proxy(reqwest::Proxy::http(proxy)?);
         }
-        None => {
-            if let Ok(proxy) = env::var("http_proxy") {
-                debug!("using http proxy from 'http_proxy' env var: {}", proxy);
-                client_builder = client_builder.proxy(reqwest::Proxy::http(proxy)?)
-            }
-            if let Ok(proxy) = env::var("HTTPS_PROXY") {
-                debug!("using https proxy from 'HTTPS_PROXY' env var: {}", proxy);
-                client_builder = client_builder.proxy(reqwest::Proxy::https(proxy)?)
-            }
+        if let Ok(proxy) = env::var("HTTPS_PROXY") {
+            debug!("using https proxy from 'HTTPS_PROXY' env var: {proxy}");
+            client_builder = client_builder.proxy(reqwest::Proxy::https(proxy)?);
         }
-    };
+    }
 
     // Disable certificate verification if requested
     if config.rsspls.insecure_disable_certificate_verification {
@@ -160,7 +156,7 @@ async fn try_main() -> eyre::Result<bool> {
                 // Eat errors when processing feeds so that we don't stop processing the others.
                 // Errors are reported, then we return a boolean indicating success or not, which
                 // is used to set the exit status of the program later.
-                error!("{:?}", report);
+                error!("{report:?}");
             }
             res.is_ok()
         })
@@ -198,7 +194,7 @@ async fn process(
     }?;
     let cached_headers = deserialise_cached_headers(&cache_path, config_hash);
 
-    let res = process_feed(client, feed, config_hash, &cached_headers)
+    let res = process_feed(client, feed, config_hash, cached_headers.as_ref())
         .await
         .wrap_err_with(|| format!("error processing feed for {}", feed.config.url))?;
 
@@ -243,7 +239,7 @@ async fn run_hook(hook: &[String], feed_path: &Path) -> eyre::Result<()> {
         .stderr(Stdio::piped())
         .output()
         .await
-        .wrap_err_with(|| format!("failed to execute post-update hook: {}", cmd))?;
+        .wrap_err_with(|| format!("failed to execute post-update hook: {cmd}"))?;
 
     if !output.status.success() {
         warn!(
@@ -274,6 +270,7 @@ fn write_channel(channel: &Channel, output_path: &Path) -> Result<(), Report> {
     })
 }
 
+#[must_use]
 pub fn version_string() -> String {
     format!("{} version {}", env!("CARGO_PKG_NAME"), version())
 }

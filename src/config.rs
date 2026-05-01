@@ -116,7 +116,7 @@ impl DateConfig {
     pub fn parse(&self, date: &str) -> eyre::Result<OffsetDateTime> {
         match self {
             DateConfig { format: None, .. } => {
-                debug!("attempting to parse {} with anydate", date);
+                debug!("attempting to parse {date} with anydate");
                 anydate::parse(date)
                     .map(|chrono| {
                         // Convert chrono DateTime<FixedOffset> to time OffsetDateTime
@@ -133,21 +133,21 @@ impl DateConfig {
                 format: Some(format),
                 ..
             } => {
-                debug!("attempting to parse {} with supplied format", date);
+                debug!("attempting to parse {date} with supplied format");
                 match self.type_ {
                     DateType::Date => Date::parse(date, format)
                         .map(|date| PrimitiveDateTime::new(date, Time::MIDNIGHT).assume_utc())
                         .map_err(|err| {
-                            debug!("parsing with format failed: {}", err);
+                            debug!("parsing with format failed: {err}");
                             eyre::Report::from(err)
                         }),
                     DateType::DateTime => OffsetDateTime::parse(date, format)
                         .or_else(|_| {
                             PrimitiveDateTime::parse(date, format)
-                                .map(|primitive| primitive.assume_utc())
+                                .map(time::PrimitiveDateTime::assume_utc)
                         })
                         .map_err(|err| {
-                            debug!("parsing with format failed: {}", err);
+                            debug!("parsing with format failed: {err}");
                             eyre::Report::from(err)
                         }),
                 }
@@ -177,7 +177,7 @@ where
     s.map(|s| time::format_description::parse_owned::<2>(&s))
         .transpose()
         .map_err(|err| {
-            warn!("unable to parse date format: {}", err);
+            warn!("unable to parse date format: {err}");
             serde::de::Error::custom(err)
         })
 }

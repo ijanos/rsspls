@@ -39,7 +39,7 @@ pub async fn process_feed(
     client: &Client,
     channel_config: &ChannelConfig,
     config_hash: ConfigHash<'_>,
-    cached_headers: &Option<HeaderMap>,
+    cached_headers: Option<&HeaderMap>,
 ) -> eyre::Result<ProcessResult> {
     let config = &channel_config.config;
     info!("processing {}", config.url);
@@ -91,7 +91,7 @@ pub async fn process_feed(
 async fn fetch_webpage(
     client: &Client,
     url: &Url,
-    cached_headers: &Option<HeaderMap>,
+    cached_headers: Option<&HeaderMap>,
     channel_config: &ChannelConfig,
     config_hash: ConfigHash<'_>,
 ) -> eyre::Result<FetchResult> {
@@ -109,7 +109,7 @@ async fn fetch_webpage(
 async fn fetch_webpage_http(
     client: &Client,
     url: &Url,
-    cached_headers: &Option<HeaderMap>,
+    cached_headers: Option<&HeaderMap>,
     channel_config: &ChannelConfig,
     config_hash: ConfigHash<'_>,
 ) -> eyre::Result<FetchResult> {
@@ -118,19 +118,19 @@ async fn fetch_webpage_http(
     let req = add_headers(
         client.http.get(url.clone()),
         cached_headers,
-        &channel_config.user_agent,
+        channel_config.user_agent.as_ref(),
     );
 
     let resp = req
         .send()
         .await
-        .wrap_err_with(|| format!("unable to fetch {}", url))?;
+        .wrap_err_with(|| format!("unable to fetch {url}"))?;
 
     // Check response
     let status = resp.status();
     if status == StatusCode::NOT_MODIFIED {
         // Cache hit, nothing to do
-        info!("{} is unmodified", url);
+        info!("{url} is unmodified");
         return Ok(FetchResult::NotModified);
     }
 
@@ -162,7 +162,7 @@ async fn fetch_webpage_http(
         config_hash,
     };
     let serialised_headers = toml::to_string(&map)
-        .map_err(|err| warn!("unable to serialise headers: {}", err))
+        .map_err(|err| warn!("unable to serialise headers: {err}"))
         .ok();
 
     // Read body
@@ -250,6 +250,7 @@ fn process_item(
             .map_err(|e| eyre!("media enclosure url invalid: {e}"))?;
 
         // Guessing the MIME type from the url as we don't have the full media
+        #[allow(clippy::map_unwrap_or)]
         let media_mime_type = parsed_url
             .path_segments()
             .and_then(|mut segments| segments.next_back())
@@ -270,6 +271,7 @@ fn process_item(
 }
 
 fn rewrite_href_value(href: &str, base_url: &url::ParseOptions) -> String {
+    #[allow(clippy::map_unwrap_or)]
     base_url
         .parse(href)
         .map(|url| url.to_string())
@@ -295,19 +297,18 @@ fn rewrite_hrefs_in_html(html: &str, base_url: &url::ParseOptions) -> eyre::Resu
 
 fn add_headers(
     mut req: RequestBuilder,
-    cached_headers: &Option<HeaderMap>,
-    user_agent: &Option<String>,
+    cached_headers: Option<&HeaderMap>,
+    user_agent: Option<&String>,
 ) -> RequestBuilder {
     use reqwest::header::{ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, USER_AGENT};
 
     if let Some(ua) = user_agent {
-        debug!("add User-Agent: {:?}", ua);
+        debug!("add User-Agent: {ua:?}");
         req = req.header(USER_AGENT, ua);
     }
 
-    let headers = match cached_headers {
-        Some(headers) => headers,
-        None => return req,
+    let Some(headers) = cached_headers else {
+        return req;
     };
 
     if let Some(last_modified) = headers.get(LAST_MODIFIED) {
@@ -354,7 +355,7 @@ fn parse_date(date: &DateConfig, node: &ElementRef<'_>) -> Option<OffsetDateTime
             let text = trim_date(&text);
             date.parse(text)
                 .map_err(|_err| {
-                    warn!("unable to parse date '{}'", text);
+                    warn!("unable to parse date '{text}'");
                 })
                 .ok()
         })
@@ -403,7 +404,7 @@ fn extract_description(
                 warn!(
                     "summary selector '{selector}' for item with title '{}' is invalid",
                     title.trim()
-                )
+                );
             })
             .ok();
         let Some(selector) = selector else {
@@ -415,10 +416,10 @@ fn extract_description(
         }
     }
 
-    if !description.is_empty() {
-        Ok(Some(description))
-    } else {
+    if description.is_empty() {
         Ok(None)
+    } else {
+        Ok(Some(description))
     }
 }
 
@@ -468,7 +469,7 @@ mod tests {
     }
 
     fn test_date_with_selector(selector: &str, format: &str) -> DateConfig {
-        toml::from_str(&format!("selector = {:?}\nformat = {:?}", selector, format)).unwrap()
+        toml::from_str(&format!("selector = {selector:?}\nformat = {format:?}")).unwrap()
     }
 
     const HUNGARIAN_FORMAT: &str =
@@ -531,11 +532,11 @@ mod tests {
             .build()
             .unwrap();
         let res = runtime
-            .block_on(process_feed(&client, &channel_config, config_hash, &None))
+            .block_on(process_feed(&client, &channel_config, config_hash, None))
             .expect("unable to process local feed");
 
         let ProcessResult::Ok { channel, .. } = res else {
-            panic!("expected ProcessResult::Ok but got: {:?}", res)
+            panic!("expected ProcessResult::Ok but got: {res:?}")
         };
 
         assert_eq!(channel.items().len(), 2);
@@ -588,7 +589,7 @@ mod tests {
 
         assert_eq!(rss_item.link.as_deref(), Some("http://example.com/post/1"));
         assert_eq!(
-            rss_item.guid.as_ref().map(|guid| guid.value()),
+            rss_item.guid.as_ref().map(rss::Guid::value),
             Some("http://example.com/post/1")
         );
     }
@@ -739,11 +740,11 @@ mod tests {
             .build()
             .unwrap();
         let res = runtime
-            .block_on(process_feed(&client, &channel_config, config_hash, &None))
+            .block_on(process_feed(&client, &channel_config, config_hash, None))
             .expect("unable to process local feed");
 
         let ProcessResult::Ok { channel, .. } = res else {
-            panic!("expected ProcessResult::Ok but got: {:?}", res)
+            panic!("expected ProcessResult::Ok but got: {res:?}")
         };
 
         assert_eq!(channel.items().len(), 2);
@@ -785,11 +786,11 @@ mod tests {
             .build()
             .unwrap();
         let res = runtime
-            .block_on(process_feed(&client, &channel_config, config_hash, &None))
+            .block_on(process_feed(&client, &channel_config, config_hash, None))
             .expect("unable to process local feed");
 
         let ProcessResult::Ok { channel, .. } = res else {
-            panic!("expected ProcessResult::Ok but got: {:?}", res)
+            panic!("expected ProcessResult::Ok but got: {res:?}")
         };
 
         assert_eq!(channel.items().len(), 5);
@@ -829,10 +830,10 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let res = runtime.block_on(process_feed(&client, &channel_config, config_hash, &None));
+        let res = runtime.block_on(process_feed(&client, &channel_config, config_hash, None));
 
         let Err(err) = res else {
-            panic!("expected error, got: {:?}", res)
+            panic!("expected error, got: {res:?}")
         };
 
         assert!(

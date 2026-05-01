@@ -16,9 +16,9 @@ pub struct Cli {
 pub fn parse_args() -> eyre::Result<Option<Cli>> {
     let mut pargs = Arguments::from_env();
     if pargs.contains(["-V", "--version"]) {
-        return print_version();
+        return Ok(print_version());
     } else if pargs.contains(["-h", "--help"]) {
-        return print_usage();
+        return Ok(print_usage());
     }
 
     Ok(Some(Cli {
@@ -27,16 +27,17 @@ pub fn parse_args() -> eyre::Result<Option<Cli>> {
     }))
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn pathbuf(s: &OsStr) -> Result<PathBuf, Infallible> {
     Ok(PathBuf::from(s))
 }
 
-fn print_version() -> eyre::Result<Option<Cli>> {
+fn print_version() -> Option<Cli> {
     println!("{}", version_string());
-    Ok(None)
+    None
 }
 
-pub fn print_usage() -> eyre::Result<Option<Cli>> {
+pub fn print_usage() -> Option<Cli> {
     println!(
         "{}
 
@@ -78,5 +79,5 @@ SEE ALSO
         env!("CARGO_PKG_AUTHORS"),
         bin = env!("CARGO_PKG_NAME")
     );
-    Ok(None)
+    None
 }
