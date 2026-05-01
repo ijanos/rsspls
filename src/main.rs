@@ -1,16 +1,8 @@
 mod cache;
 mod cli;
 mod config;
-mod feed;
-
-#[cfg(windows)]
 mod dirs;
-
-#[cfg(not(windows))]
-mod xdg;
-
-#[cfg(not(windows))]
-use crate::xdg as dirs;
+mod feed;
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
@@ -131,8 +123,8 @@ async fn try_main() -> eyre::Result<bool> {
             .wrap_err("unable to build HTTP client")?,
     };
 
-    // Wrap up xdg::BaseDirectories for sharing between tasks. Mutex is used so that only one
-    // thread at a time will attempt to create cache directories.
+    // Wrap up platform directory resolver for sharing between tasks. Mutex is used so that only
+    // one thread at a time will attempt to create cache directories.
     let dirs = dirs::new()?;
     let dirs = Arc::new(Mutex::new(dirs));
 
