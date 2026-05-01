@@ -1,9 +1,10 @@
-use std::{fs, mem};
+use std::fs;
 
 use basic_toml as toml;
 use kuchiki::traits::TendrilSink;
-use kuchiki::{ElementData, NodeDataRef, NodeRef};
+use kuchiki::{ElementData, NodeDataRef};
 use log::{debug, error, info, warn};
+use lol_html::{RewriteStrSettings, element, rewrite_str};
 use mime_guess::mime;
 use reqwest::header::HeaderMap;
 use reqwest::{RequestBuilder, StatusCode};
@@ -58,7 +59,6 @@ pub async fn process_feed(
 
     let doc = kuchiki::parse_html().one(html);
     let base_url = Url::options().base_url(Some(&url));
-    rewrite_urls(&doc, &base_url)?;
 
     let mut items = Vec::new();
     for item in doc
@@ -207,23 +207,24 @@ fn process_item(
         .as_node()
         .select_first(link_selector)
         .map_err(|()| eyre!("invalid selector for link: {}", link_selector))?;
-    // TODO: Need to make links absolute (probably ones in content too)
+    // Keep the previous global href-rewrite behaviour without mutating the DOM.
     let attrs = link.attributes.borrow();
     let link_url = attrs
         .get("href")
+        .map(|href| rewrite_href_value(href, base_url))
         .ok_or_else(|| eyre!("element selected as link has no 'href' attribute"))?;
     let title_text = title.text_contents();
-    let description = extract_description(config, &item, &title_text)?;
+    let description = extract_description(config, &item, &title_text, base_url)?;
     let date = extract_pub_date(config, &item)?;
     let guid = GuidBuilder::default()
-        .value(link_url)
+        .value(&link_url)
         .permalink(false)
         .build();
 
     let mut rss_item_builder = ItemBuilder::default();
     rss_item_builder
         .title(title_text)
-        .link(base_url.parse(link_url).ok().map(|u| u.to_string()))
+        .link(base_url.parse(&link_url).ok().map(|u| u.to_string()))
         .guid(Some(guid))
         .pub_date(date.map(|date| date.format(&Rfc2822).unwrap()))
         .description(description);
@@ -266,20 +267,28 @@ fn process_item(
     Ok(rss_item_builder.build())
 }
 
-fn rewrite_urls(doc: &NodeRef, base_url: &url::ParseOptions) -> eyre::Result<()> {
-    for el in doc
-        .select("*[href]")
-        .map_err(|()| eyre!("unable to select links for rewriting"))?
-    {
-        let mut attrs = el.attributes.borrow_mut();
-        attrs.get_mut("href").and_then(|href| {
-            let mut url = base_url.parse(href).ok().map(|url| url.to_string())?;
-            mem::swap(href, &mut url);
-            Some(())
-        });
-    }
+fn rewrite_href_value(href: &str, base_url: &url::ParseOptions) -> String {
+    base_url
+        .parse(href)
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| href.to_string())
+}
 
-    Ok(())
+fn rewrite_hrefs_in_html(html: &str, base_url: &url::ParseOptions) -> eyre::Result<String> {
+    rewrite_str(
+        html,
+        RewriteStrSettings {
+            element_content_handlers: vec![element!("*[href]", |el| {
+                if let Some(href) = el.get_attribute("href") {
+                    el.set_attribute("href", &rewrite_href_value(&href, base_url))?;
+                }
+
+                Ok(())
+            })],
+            ..RewriteStrSettings::default()
+        },
+    )
+    .wrap_err("unable to rewrite hrefs in HTML fragment")
 }
 
 fn add_headers(
@@ -359,8 +368,9 @@ fn extract_description(
     config: &FeedConfig,
     item: &NodeDataRef<ElementData>,
     title: &str,
+    base_url: &url::ParseOptions,
 ) -> eyre::Result<Option<String>> {
-    let mut description = Vec::new();
+    let mut description = String::new();
 
     for selector in &config.summary {
         let nodes = item
@@ -378,15 +388,18 @@ fn extract_description(
         };
 
         for node in nodes {
+            let mut node_html = Vec::new();
             node.as_node()
-                .serialize(&mut description)
-                .wrap_err("unable to serialise description")?
+                .serialize(&mut node_html)
+                .wrap_err("unable to serialise description")?;
+            // NOTE(unwrap): Should be safe as HTML has to be legit Unicode.
+            let node_html = String::from_utf8(node_html).unwrap();
+            description.push_str(&rewrite_hrefs_in_html(&node_html, base_url)?);
         }
     }
 
     if !description.is_empty() {
-        // NOTE(unwrap): Should be safe as XML has to be legit Unicode)
-        Ok(Some(String::from_utf8(description).unwrap()))
+        Ok(Some(description))
     } else {
         Ok(None)
     }
@@ -531,14 +544,12 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_urls() {
+    fn test_rewrite_hrefs_in_html() {
         let html = r#"<html><body><a href="/cool">cool thing</a> <div href="dont-do-this">ok</div><a href="http://example.com">example</a></body></html>"#;
-        let expected = r#"<html><head></head><body><a href="http://example.com/cool">cool thing</a> <div href="http://example.com/dont-do-this">ok</div><a href="http://example.com/">example</a></body></html>"#;
-        let doc = kuchiki::parse_html().one(html);
+        let expected = r#"<html><body><a href="http://example.com/cool">cool thing</a> <div href="http://example.com/dont-do-this">ok</div><a href="http://example.com/">example</a></body></html>"#;
         let base_url = "http://example.com".parse().unwrap();
         let base = Url::options().base_url(Some(&base_url));
-        rewrite_urls(&doc, &base).unwrap();
-        let rewritten = doc.to_string();
+        let rewritten = rewrite_hrefs_in_html(html, &base).unwrap();
         assert_eq!(rewritten, expected);
     }
 
@@ -552,8 +563,10 @@ mod tests {
             summary: vec!["span, p".to_string()],
             ..test_config()
         };
+        let base_url = "http://example.com".parse().unwrap();
+        let base = Url::options().base_url(Some(&base_url));
 
-        let description = extract_description(&config, &item, "title")
+        let description = extract_description(&config, &item, "title", &base)
             .unwrap()
             .unwrap();
 
@@ -571,8 +584,10 @@ mod tests {
             summary: vec!["span".to_string(), "p".to_string()],
             ..test_config()
         };
+        let base_url = "http://example.com".parse().unwrap();
+        let base = Url::options().base_url(Some(&base_url));
 
-        let description = extract_description(&config, &item, "title")
+        let description = extract_description(&config, &item, "title", &base)
             .unwrap()
             .unwrap();
 
