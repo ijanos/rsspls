@@ -5,11 +5,20 @@
 - [x] bump to latest dependencies / latest rust
 - [x] add update hooks
 - [x] switch to `scraper` for better selector support
+- [x] create a container to easier deploys
 - [ ] use default link select `[href]` or maybe `a[href], area[href], link[href]`
 - [ ] use URL from root item if it has `href` attribute
 - [ ] Support parsing JSON endpoints with JSONPath
-- [ ] create a container to easier deploys
 - [ ] combine multiple sources into one feed
+
+## Container build
+
+```bash
+docker build -f Containerfile -t rsspls .
+docker run --rm rsspls
+# more complex example
+docker run --rm -v ./feeds.toml:/config/feeds.toml:ro -v ./out:/out rsspls -c /config/feeds.toml -o /out
+```
 
 ---
 ---
