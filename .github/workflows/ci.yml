@@ -6,8 +6,13 @@ on:
   # pull_request:
   #   branches: [fork]
 
+permissions:
+  contents: read
+  packages: write
+
 env:
   CARGO_TERM_COLOR: always
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   lint:
@@ -79,8 +84,8 @@ jobs:
         run: cargo test --verbose
 
   container:
-    name: Build Container Image
-    needs: lint
+    name: Build and Publish Container Image
+    needs: [lint, build]
     runs-on: ubuntu-latest
 
     steps:
@@ -92,3 +97,12 @@ jobs:
 
       - name: Smoke test image entrypoint
         run: docker run --rm rsspls:ci --help
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Tag image for GHCR
+        run: docker tag rsspls:ci ${{ env.IMAGE_NAME }}:latest
+
+      - name: Push latest image to GHCR
+        run: docker push ${{ env.IMAGE_NAME }}:latest

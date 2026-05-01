@@ -14,10 +14,10 @@
 ## Container build
 
 ```bash
-docker build -f Containerfile -t rsspls .
-docker run --rm rsspls
+podman build -f Containerfile -t rsspls .
+podman run --rm rsspls
 # more complex example
-docker run --rm -v ./feeds.toml:/config/feeds.toml:ro -v ./out:/out rsspls -c /config/feeds.toml -o /out
+podman run --rm -v ./feeds.toml:/config/feeds.toml:ro -v ./out:/out rsspls -c /config/feeds.toml -o /out
 ```
 
 ---
