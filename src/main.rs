@@ -6,7 +6,7 @@ mod feed;
 
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs};
 
@@ -21,7 +21,7 @@ use simple_eyre::eyre;
 use crate::cache::deserialise_cached_headers;
 use crate::config::ConfigHash;
 use crate::config::{ChannelConfig, Config};
-use crate::dirs::Dirs;
+use crate::dirs::BaseDirs;
 use crate::feed::{ProcessResult, process_feed};
 
 const RSSPLS_LOG: &str = "RSSPLS_LOG";
@@ -123,27 +123,14 @@ async fn try_main() -> eyre::Result<bool> {
             .wrap_err("unable to build HTTP client")?,
     };
 
-    // Wrap up platform directory resolver for sharing between tasks. Mutex is used so that only
-    // one thread at a time will attempt to create cache directories.
-    let dirs = dirs::new()?;
-    let dirs = Arc::new(Mutex::new(dirs));
-
     // Spawn the tasks
     let config_hash = Arc::new(config.hash.clone());
     let futures = config.feed.into_iter().map(|feed| {
         let client = client.clone(); // Client uses Arc internally
         let output_dir = output_dir.clone();
-        let dirs = Arc::clone(&dirs);
         let config_hash = Arc::clone(&config_hash);
         tokio::spawn(async move {
-            let res = process(
-                &feed,
-                &client,
-                ConfigHash(config_hash.as_str()),
-                output_dir,
-                dirs,
-            )
-            .await;
+            let res = process(&feed, &client, ConfigHash(config_hash.as_str()), output_dir).await;
             if let Err(ref report) = res {
                 // Eat errors when processing feeds so that we don't stop processing the others.
                 // Errors are reported, then we return a boolean indicating success or not, which
@@ -169,7 +156,6 @@ async fn process(
     client: &Client,
     config_hash: ConfigHash<'_>,
     output_dir: PathBuf,
-    dirs: Dirs,
 ) -> Result<(), Report> {
     // Generate paths up front so we report any errors before making requests
     let filename = Path::new(&feed.filename);
@@ -179,11 +165,8 @@ async fn process(
         .ok_or_else(|| eyre!("{} is not a valid file name", filename.display()))?;
     let output_path = output_dir.join(filename);
     let cache_filename = filename.with_extension("toml");
-    let cache_path = {
-        let dirs = dirs.lock().map_err(|_| eyre!("unable to acquire mutex"))?;
-        dirs.place_cache_file(&cache_filename)
-            .wrap_err("unable to create path to cache file")
-    }?;
+    let cache_path = BaseDirs::place_cache_file(&cache_filename)
+        .wrap_err("unable to create path to cache file")?;
     let cached_headers = deserialise_cached_headers(&cache_path, config_hash);
 
     let res = process_feed(client, feed, config_hash, cached_headers.as_ref())
@@ -391,9 +374,7 @@ mod tests {
             file_urls: true,
             http: HttpClient::new(),
         };
-        let dirs = Arc::new(Mutex::new(crate::dirs::new().unwrap()));
-
-        process(&feed, &client, ConfigHash("hash"), temp, dirs)
+        process(&feed, &client, ConfigHash("hash"), temp)
             .await
             .unwrap();
         assert!(marker.exists());

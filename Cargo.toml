@@ -37,7 +37,7 @@ serde = { version = "1.0.205", features = ["derive"] }
 simple-eyre = "0.3.1"
 tokio = { version = "1.43.1", features = ["rt-multi-thread", "macros", "process"] }
 url = "2.5.2"
-dirs = "5.0.1"
+dirs = "6"
 
 [dependencies.time]
 version = "0.3.47"
