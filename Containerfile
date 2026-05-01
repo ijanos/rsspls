@@ -10,17 +10,13 @@ RUN cargo build --release --locked
 
 FROM debian:trixie-slim AS runtime
 
-# TLS certificates are needed for fetching HTTPS pages.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates rsync rclone  \
     && rm -rf /var/lib/apt/lists/*
 
-# Run as non-root user.
-RUN useradd --system --uid 10001 --create-home --home-dir /home/rsspls rsspls
+ENV XDG_CONFIG_HOME=/rsspls/
+ENV XDG_CACHE_HOME=/rsspls/cache
 
-WORKDIR /work
 COPY --from=builder /app/target/release/rsspls /usr/local/bin/rsspls
 
-USER rsspls
 ENTRYPOINT ["rsspls"]
-CMD ["--help"]
