@@ -52,7 +52,8 @@ OPTIONS:
 
     -c, --config
             Specify the path to the configuration file.
-            $XDG_CONFIG_HOME/rsspls/feeds.toml is used if not supplied.
+            $RSSPLS_HOME/feeds.toml is used if RSSPLS_HOME is set.
+            Otherwise $XDG_CONFIG_HOME/rsspls/feeds.toml is used.
 
     -o, --output
             Directory to write generated feeds to.
@@ -61,11 +62,16 @@ OPTIONS:
             Prints version information
 
 FILES:
-     ~/$XDG_CONFIG_HOME/rsspls/feeds.toml    rsspls configuration file.
+     $RSSPLS_HOME/feeds.toml                 rsspls configuration file.
 
-     ~/$XDG_CONFIG_HOME/rsspls               Configuration directory.
+     $RSSPLS_HOME                            Configuration directory.
 
-     ~/XDG_CACHE_HOME/rsspls                 Cache directory.
+     $RSSPLS_HOME/cache                      Cache directory.
+
+     If RSSPLS_HOME is unset:
+     $XDG_CONFIG_HOME/rsspls/feeds.toml      rsspls configuration file.
+     $XDG_CONFIG_HOME/rsspls                 Configuration directory.
+     $XDG_CACHE_HOME/rsspls                  Cache directory.
 
      Note: XDG_CONFIG_HOME defaults to ~/.config, XDG_CACHE_HOME
      defaults to ~/.cache.

@@ -14,8 +14,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates rsync rclone  \
     && rm -rf /var/lib/apt/lists/*
 
-ENV XDG_CONFIG_HOME=/rsspls/
-ENV XDG_CACHE_HOME=/rsspls/cache
+ENV RSSPLS_HOME=/rsspls
 
 COPY --from=builder /app/target/release/rsspls /usr/local/bin/rsspls
 

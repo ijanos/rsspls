@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use simple_eyre::eyre;
 use time::format_description::OwnedFormatItem;
 
-use crate::dirs::BaseDirs;
+use crate::dirs;
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
 #[derive(Debug, Eq, PartialEq, Serialize, Clone, Copy)]
@@ -85,8 +85,7 @@ impl Config {
     /// Read the config file path and the supplied path or default if None
     pub fn read(config_path: Option<PathBuf>) -> eyre::Result<Config> {
         let config_path = config_path.ok_or(()).or_else(|()| {
-            BaseDirs::place_config_file("feeds.toml")
-                .wrap_err("unable to create path to config file")
+            dirs::place_config_file("feeds.toml").wrap_err("unable to create path to config file")
         })?;
         let raw_config = fs::read(&config_path).wrap_err_with(|| {
             format!(

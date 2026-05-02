@@ -21,7 +21,7 @@ use simple_eyre::eyre;
 use crate::cache::deserialise_cached_headers;
 use crate::config::ConfigHash;
 use crate::config::{ChannelConfig, Config};
-use crate::dirs::BaseDirs;
+
 use crate::feed::{ProcessResult, process_feed};
 
 const RSSPLS_LOG: &str = "RSSPLS_LOG";
@@ -165,8 +165,8 @@ async fn process(
         .ok_or_else(|| eyre!("{} is not a valid file name", filename.display()))?;
     let output_path = output_dir.join(filename);
     let cache_filename = filename.with_extension("toml");
-    let cache_path = BaseDirs::place_cache_file(&cache_filename)
-        .wrap_err("unable to create path to cache file")?;
+    let cache_path =
+        dirs::place_cache_file(&cache_filename).wrap_err("unable to create path to cache file")?;
     let cached_headers = deserialise_cached_headers(&cache_path, config_hash);
 
     let res = process_feed(client, feed, config_hash, cached_headers.as_ref())

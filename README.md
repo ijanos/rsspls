@@ -16,9 +16,16 @@
 ```bash
 podman build -f Containerfile -t rsspls .
 podman run --rm rsspls
-# more complex example
-podman run --rm -v ./feeds.toml:/config/feeds.toml:ro -v ./out:/out rsspls -c /config/feeds.toml -o /out
+
+# use the latest published version
+podman run --rm -v /some/dir:/rsspls ghcr.io/ijanos/rsspls:latest
 ```
+
+The container image sets `RSSPLS_HOME=/rsspls` by default. When `RSSPLS_HOME` is set,
+`rsspls` reads `feeds.toml` from `$RSSPLS_HOME/feeds.toml` and stores cache files in
+`$RSSPLS_HOME/cache`.
+
+The container has `rsync` and `rclone` installed for post update hooks. 
 
 ---
 ---
