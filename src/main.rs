@@ -62,21 +62,26 @@ async fn try_main() -> eyre::Result<bool> {
     let config = Config::read(cli.config_path)?;
 
     // Determine output directory
-    let output_dir = match cli.output_path {
-        Some(path) => Some(path),
-        None => config
-            .rsspls
-            .output
-            .map(|ref path| {
-                dirs::home_dir()
-                    .ok_or_else(|| eyre!("unable to determine home directory"))
-                    .map(|home| expand_tilde(path, home))
-            })
-            .transpose()?,
-    }
-    .ok_or_else(|| {
-        eyre!("output directory must be supplied via --output or be present in configuration file")
-    })?;
+    let configured_output_dir = config
+        .rsspls
+        .output
+        .as_ref()
+        .map(|path| {
+            dirs::home_dir()
+                .ok_or_else(|| eyre!("unable to determine home directory"))
+                .map(|home| expand_tilde(path, home))
+        })
+        .transpose()?;
+
+    let output_dir = cli
+        .output_path
+        .or(configured_output_dir)
+        .or_else(dirs::default_output_dir)
+        .ok_or_else(|| {
+            eyre!(
+                "output directory must be supplied via --output, be present in configuration file, or RSSPLS_HOME must be set"
+            )
+        })?;
 
     // Ensure output directory exists
     if !output_dir.exists() {

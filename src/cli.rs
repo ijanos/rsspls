@@ -44,7 +44,7 @@ pub fn print_usage() -> Option<Cli> {
 {bin} generates RSS feeds from web pages.
 
 USAGE:
-    {bin} [OPTIONS] -o OUTPUT_DIR
+    {bin} [OPTIONS]
 
 OPTIONS:
     -h, --help
@@ -57,6 +57,7 @@ OPTIONS:
 
     -o, --output
             Directory to write generated feeds to.
+            $RSSPLS_HOME/out is used if RSSPLS_HOME is set and no output is configured.
 
     -V, --version
             Prints version information
@@ -67,6 +68,8 @@ FILES:
      $RSSPLS_HOME                            Configuration directory.
 
      $RSSPLS_HOME/cache                      Cache directory.
+
+     $RSSPLS_HOME/out                        Default output directory.
 
      If RSSPLS_HOME is unset:
      $XDG_CONFIG_HOME/rsspls/feeds.toml      rsspls configuration file.

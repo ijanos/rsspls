@@ -26,6 +26,10 @@ pub fn place_cache_file<P: AsRef<Path>>(path: P) -> eyre::Result<PathBuf> {
     Ok(cache)
 }
 
+pub fn default_output_dir() -> Option<PathBuf> {
+    rsspls_home_dir().map(|path| path.join("out"))
+}
+
 fn config_dir() -> eyre::Result<PathBuf> {
     let config = if let Some(config) = rsspls_home_dir() {
         config
