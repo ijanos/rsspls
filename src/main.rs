@@ -222,14 +222,22 @@ async fn run_hook(hook: &[String], feed_path: &Path) -> eyre::Result<()> {
         .wrap_err_with(|| format!("failed to execute post-update hook: {cmd}"))?;
 
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         warn!(
-            "post-update hook for '{}' exited with non-zero status.\ncmd: {}, status: {}'\nstdout: {}\nstderr: {}",
+            "post-update hook for '{}' exited with non-zero status.\ncmd: {}, status: {}\nstdout: {}\nstderr: {}",
             feed_path.display(),
             cmd,
             output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
+            stdout,
+            stderr,
         );
+        return Err(eyre!(
+            "post-update hook failed for '{}': command '{}' exited with status {}",
+            feed_path.display(),
+            cmd,
+            output.status,
+        ));
     }
     Ok(())
 }
@@ -383,5 +391,18 @@ mod tests {
             .await
             .unwrap();
         assert!(marker.exists());
+    }
+
+    #[tokio::test]
+    async fn test_run_hook_returns_err_on_non_zero_exit() {
+        let feed = env::temp_dir().join("feed.xml");
+
+        #[cfg(not(windows))]
+        let hook = vec!["sh".into(), "-c".into(), "exit 7".into()];
+        #[cfg(windows)]
+        let hook = vec!["cmd".into(), "/c".into(), "exit /b 7".into()];
+
+        let err = run_hook(&hook, &feed).await.unwrap_err();
+        assert!(err.to_string().contains("post-update hook failed"));
     }
 }
