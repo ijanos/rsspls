@@ -1695,7 +1695,6 @@ dependencies = [
  "anydate",
  "atomicwrites",
  "basic-toml",
- "chrono",
  "cryptoxide",
  "dirs",
  "futures",
