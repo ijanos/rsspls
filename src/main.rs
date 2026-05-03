@@ -16,6 +16,7 @@ use futures::future;
 use log::{LevelFilter, debug, error, info, warn};
 use reqwest::Client as HttpClient;
 use rss::Channel;
+use rss::validation::Validate;
 use simple_eyre::eyre;
 
 use crate::cache::deserialise_cached_headers;
@@ -181,7 +182,7 @@ async fn process(
     match res {
         ProcessResult::NotModified => Ok(()),
         ProcessResult::Ok { channel, headers } => {
-            // TODO: channel.validate()
+            channel.validate()?;
             write_channel(&channel, &output_path).wrap_err_with(|| {
                 format!("unable to write output file: {}", output_path.display())
             })?;
