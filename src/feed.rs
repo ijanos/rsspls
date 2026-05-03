@@ -448,7 +448,7 @@ mod tests {
 
     impl Drop for RmOnDrop {
         fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
+            fs::remove_file(&self.0).expect("failed to remove temporary file");
         }
     }
 
