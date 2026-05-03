@@ -50,3 +50,31 @@ strip = "debuginfo"
 default = ["rust-tls"]
 native-tls = ["reqwest/native-tls"]
 rust-tls = ["reqwest/rustls"]
+
+[lints.clippy]
+# Groups
+all = "deny" # deny on all clippy default lints
+pedantic = "deny" # deny on all clippy pedantic lints
+
+# Cargo
+wildcard_dependencies = "deny"
+
+# rules from the restrictions category
+string_slice = "deny"
+allow_attributes = "deny"
+# indexing_slicing = "deny"
+panic_in_result_fn = "deny"
+unwrap_in_result = "deny"
+unchecked_time_subtraction = "deny"
+verbose_file_reads = "deny"
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+large_futures = "deny"
+rc_mutex = "deny"
+iter_not_returning_iterator = "deny"
+dbg_macro = "deny"
+
+# currently in nightly
+# missing_lints_inheritance = "deny"

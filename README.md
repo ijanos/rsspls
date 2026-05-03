@@ -6,10 +6,11 @@
 - [x] add update hooks
 - [x] switch to `scraper` for better selector support
 - [x] create a container to easier deploys
+- [x] try to match selector on the root item first (rsspls can only match on children)
 - [ ] use default link select `[href]` or maybe `a[href], area[href], link[href]`
-- [ ] use URL from root item if it has `href` attribute
 - [ ] Support parsing JSON endpoints with JSONPath
 - [ ] combine multiple sources into one feed
+- [ ] maybe make feeds with zero items error out?
 
 ## Container build
 

@@ -209,7 +209,7 @@ where
         where
             E: de::Error,
         {
-            Ok(FromStr::from_str(value).unwrap())
+            FromStr::from_str(value).map_err(|err| match err {})
         }
 
         fn visit_map<M>(self, map: M) -> Result<T, M::Error>

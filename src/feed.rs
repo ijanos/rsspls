@@ -250,7 +250,7 @@ fn process_item(
             .map_err(|e| eyre!("media enclosure url invalid: {e}"))?;
 
         // Guessing the MIME type from the url as we don't have the full media
-        #[allow(clippy::map_unwrap_or)]
+        #[expect(clippy::map_unwrap_or)]
         let media_mime_type = parsed_url
             .path_segments()
             .and_then(|mut segments| segments.next_back())
@@ -271,7 +271,7 @@ fn process_item(
 }
 
 fn rewrite_href_value(href: &str, base_url: &url::ParseOptions) -> String {
-    #[allow(clippy::map_unwrap_or)]
+    #[expect(clippy::map_unwrap_or)]
     base_url
         .parse(href)
         .map(|url| url.to_string())

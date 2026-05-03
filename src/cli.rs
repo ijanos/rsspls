@@ -27,7 +27,7 @@ pub fn parse_args() -> eyre::Result<Option<Cli>> {
     }))
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[expect(clippy::unnecessary_wraps)]
 fn pathbuf(s: &OsStr) -> Result<PathBuf, Infallible> {
     Ok(PathBuf::from(s))
 }
