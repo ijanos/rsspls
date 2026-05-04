@@ -193,7 +193,9 @@ async fn process(
                 fs::write(cache_path, headers).wrap_err("unable to write to cache")?;
             }
 
-            run_hook(&feed.post_update_hook, &output_path).await?;
+            if let Some(hook) = &feed.post_update_hook {
+                run_hook(hook, &output_path).await?;
+            }
             Ok(())
         }
     }
@@ -374,7 +376,7 @@ mod tests {
             title: "T".into(),
             filename: "t.xml".into(),
             user_agent: None,
-            post_update_hook: hook,
+            post_update_hook: Some(hook),
             config: crate::config::FeedConfig {
                 url: url::Url::from_file_path(&html).unwrap().into(),
                 item: "h2".into(),

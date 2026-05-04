@@ -33,6 +33,8 @@ pub struct RssplsConfig {
     pub output: Option<String>,
     /// Optional proxy to use for http requests
     pub proxy: Option<String>,
+    /// Default post-update hook to run after feeds are written
+    pub post_update_hook: Option<Vec<String>>,
     /// Whether to allow fetching web pages from file URLs
     #[serde(default)]
     pub file_urls: bool,
@@ -46,8 +48,7 @@ pub struct ChannelConfig {
     pub title: String,
     pub filename: String,
     pub user_agent: Option<String>,
-    #[serde(default)]
-    pub post_update_hook: Vec<String>,
+    pub post_update_hook: Option<Vec<String>>,
     pub config: FeedConfig,
 }
 
@@ -103,6 +104,14 @@ impl Config {
                 config_path.display()
             )
         })?;
+
+        for feed in &mut config.feed {
+            if feed.post_update_hook.is_none() {
+                feed.post_update_hook
+                    .clone_from(&config.rsspls.post_update_hook);
+            }
+        }
+
         config.hash = digest;
         Ok(config)
     }
@@ -299,6 +308,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{env, process};
+
+    static NEXT_TEMP_CONFIG_ID: AtomicUsize = AtomicUsize::new(0);
 
     fn test_date(format: &'static str) -> DateConfig {
         DateConfig {
@@ -314,6 +327,18 @@ mod tests {
             type_: DateType::Date,
             format: None,
         }
+    }
+
+    fn read_config_from_toml(toml: &str) -> Config {
+        let id = NEXT_TEMP_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
+        let path =
+            env::temp_dir().join(format!("rsspls-config-test-{}-{}.toml", process::id(), id));
+
+        fs::write(&path, toml).unwrap();
+        let config = Config::read(Some(path.clone())).unwrap();
+        fs::remove_file(path).unwrap();
+
+        config
     }
 
     #[test]
@@ -342,5 +367,82 @@ mod tests {
             .parse("Friday, January 8th, 2021 12:13pm").is_ok());
         assert!(test_date("[weekday case_sensitive:false], [month repr:long case_sensitive:false] [day padding:none], [year] [hour repr:24]:[minute]")
             .parse("Friday, January 8, 2021 21:33").is_ok());
+    }
+
+    #[test]
+    fn test_feed_inherits_global_post_update_hook() {
+        let config = read_config_from_toml(
+            r#"
+            [rsspls]
+            post_update_hook = ["echo", "global"]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+
+            [feed.config]
+            url = "https://example.com"
+            item = "article"
+            heading = "h1"
+            "#,
+        );
+
+        let feed = config.feed.into_iter().next().unwrap();
+
+        assert_eq!(
+            feed.post_update_hook,
+            Some(vec!["echo".to_string(), "global".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_feed_post_update_hook_overrides_global() {
+        let config = read_config_from_toml(
+            r#"
+            [rsspls]
+            post_update_hook = ["echo", "global"]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+            post_update_hook = ["echo", "feed"]
+
+            [feed.config]
+            url = "https://example.com"
+            item = "article"
+            heading = "h1"
+            "#,
+        );
+
+        let feed = config.feed.into_iter().next().unwrap();
+
+        assert_eq!(
+            feed.post_update_hook,
+            Some(vec!["echo".to_string(), "feed".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_empty_feed_post_update_hook_disables_global() {
+        let config = read_config_from_toml(
+            r#"
+            [rsspls]
+            post_update_hook = ["echo", "global"]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+            post_update_hook = []
+
+            [feed.config]
+            url = "https://example.com"
+            item = "article"
+            heading = "h1"
+            "#,
+        );
+
+        let feed = config.feed.into_iter().next().unwrap();
+
+        assert_eq!(feed.post_update_hook, Some(vec![]));
     }
 }
