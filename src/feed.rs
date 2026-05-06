@@ -423,6 +423,7 @@ fn extract_description(
     }
 }
 
+#[expect(clippy::indexing_slicing)]
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};

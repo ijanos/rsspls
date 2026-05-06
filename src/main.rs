@@ -206,8 +206,9 @@ async fn run_hook(hook: &[String], feed_path: &Path) -> eyre::Result<()> {
         return Ok(());
     }
 
-    let cmd = &hook[0];
-    let args = &hook[1..];
+    let (cmd, args) = hook
+        .split_first()
+        .ok_or(eyre::eyre!("hook is empty which shouldn't happen here"))?;
 
     info!(
         "running post-update hook: {} for {}",

@@ -32,11 +32,13 @@ fn pathbuf(s: &OsStr) -> Result<PathBuf, Infallible> {
     Ok(PathBuf::from(s))
 }
 
+#[expect(clippy::print_stdout)]
 fn print_version() -> Option<Cli> {
     println!("{}", version_string());
     None
 }
 
+#[expect(clippy::print_stdout)]
 pub fn print_usage() -> Option<Cli> {
     println!(
         "{}
