@@ -18,6 +18,8 @@ use crate::Client;
 use crate::cache::RequestCacheWrite;
 use crate::config::{ChannelConfig, ConfigHash, DateConfig, FeedConfig};
 
+const DEFAULT_LINK_SELECTOR: &str = "a[href], area[href]";
+
 #[derive(Debug)]
 pub enum ProcessResult {
     NotModified,
@@ -52,7 +54,7 @@ impl FeedSelectors {
         let heading = Selector::parse(&config.heading)
             .map_err(|_| eyre!("invalid selector for heading: {}", config.heading))?;
 
-        let link_raw = config.link.as_deref().unwrap_or(&config.heading);
+        let link_raw = config.link.as_deref().unwrap_or(DEFAULT_LINK_SELECTOR);
         let link = Selector::parse(link_raw)
             .map_err(|_| eyre!("invalid selector for link: {}", link_raw))?;
 
@@ -202,8 +204,7 @@ async fn fetch_webpage_http(
 
     if config.link.is_none() {
         info!(
-            "no explicit link selector provided, falling back to heading selector: {:?}",
-            config.heading
+            "no explicit link selector provided, using default link selector: {DEFAULT_LINK_SELECTOR}",
         );
     }
 
@@ -606,6 +607,43 @@ mod tests {
         let base = Url::options().base_url(Some(&base_url));
         let rewritten = rewrite_hrefs_in_html(html, &base).unwrap();
         assert_eq!(rewritten, expected);
+    }
+
+    #[test]
+    fn test_from_config_uses_default_link_selector_when_link_is_missing() {
+        let html = r#"<html><body><article class="post"><h2>Heading Only</h2><p><a href="/post/1">Read more</a></p></article></body></html>"#;
+        let doc = Html::parse_document(html);
+        let item_selector = Selector::parse("article.post").unwrap();
+        let item = doc.select(&item_selector).next().unwrap();
+
+        let config = FeedConfig {
+            item: "article.post".to_string(),
+            heading: "h2".to_string(),
+            link: None,
+            ..test_config()
+        };
+
+        let selectors = FeedSelectors::from_config(&config).unwrap();
+        let link = select_first_including_self(item, &selectors.link).unwrap();
+
+        assert_eq!(link.value().name(), "a");
+        assert_eq!(link.value().attr("href"), Some("/post/1"));
+    }
+
+    #[test]
+    fn test_from_config_rejects_empty_explicit_link_selector() {
+        let config = FeedConfig {
+            item: "article.post".to_string(),
+            heading: "h2".to_string(),
+            link: Some(String::new()),
+            ..test_config()
+        };
+
+        let err = FeedSelectors::from_config(&config).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid selector for link:"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
