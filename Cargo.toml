@@ -84,11 +84,12 @@ string_slice = "deny"
 tests_outside_test_module = "deny"
 try_err = "deny"
 unchecked_time_subtraction = "deny"
+unimplemented = "deny"
+unnecessary_self_imports = "deny"
 unused_result_ok = "deny"
 unwrap_in_result = "deny"
 use_debug = "deny"
 verbose_file_reads = "deny"
-
 # currently in nightly
 # missing_lints_inheritance = "deny"
 # inline_modules = "deny"
