@@ -35,6 +35,65 @@ pub enum FetchResult {
     },
 }
 
+#[derive(Debug)]
+struct FeedSelectors {
+    item: Selector,
+    heading: Selector,
+    link: Selector,
+    summary: Vec<Selector>,
+    date: Option<Selector>,
+    media: Option<Selector>,
+}
+
+impl FeedSelectors {
+    fn from_config(config: &FeedConfig) -> eyre::Result<Self> {
+        let item = Selector::parse(&config.item)
+            .map_err(|_| eyre!("invalid selector for item: {}", config.item))?;
+        let heading = Selector::parse(&config.heading)
+            .map_err(|_| eyre!("invalid selector for heading: {}", config.heading))?;
+
+        let link_raw = config.link.as_deref().unwrap_or(&config.heading);
+        let link = Selector::parse(link_raw)
+            .map_err(|_| eyre!("invalid selector for link: {}", link_raw))?;
+
+        let summary = config
+            .summary
+            .iter()
+            .map(|selector| {
+                Selector::parse(selector)
+                    .map_err(|_| eyre!("invalid selector for summary: {}", selector))
+            })
+            .collect::<eyre::Result<Vec<_>>>()?;
+
+        let date = config
+            .date
+            .as_ref()
+            .map(|date| {
+                Selector::parse(date.selector())
+                    .map_err(|_| eyre!("invalid selector for date: {}", date.selector()))
+            })
+            .transpose()?;
+
+        let media = config
+            .media
+            .as_deref()
+            .map(|media_selector| {
+                Selector::parse(media_selector)
+                    .map_err(|_| eyre!("invalid selector for media: {}", media_selector))
+            })
+            .transpose()?;
+
+        Ok(Self {
+            item,
+            heading,
+            link,
+            summary,
+            date,
+            media,
+        })
+    }
+}
+
 pub async fn process_feed(
     client: &Client,
     channel_config: &ChannelConfig,
@@ -54,16 +113,14 @@ pub async fn process_feed(
             FetchResult::NotModified => return Ok(ProcessResult::NotModified),
         };
 
-    let link_selector = config.link.as_ref().unwrap_or(&config.heading);
+    let selectors = FeedSelectors::from_config(config)?;
 
     let doc = Html::parse_document(&html);
-    let item_selector = Selector::parse(&config.item)
-        .map_err(|_| eyre!("invalid selector for item: {}", config.item))?;
     let base_url = Url::options().base_url(Some(&url));
 
     let mut items = Vec::new();
-    for item in doc.select(&item_selector) {
-        match process_item(config, item, link_selector, &base_url) {
+    for item in doc.select(&selectors.item) {
+        match process_item(config, &selectors, item, &base_url) {
             Ok(rss_item) => items.push(rss_item),
             Err(err) => {
                 let report = err.wrap_err(format!(
@@ -193,21 +250,17 @@ async fn fetch_webpage_local(url: &Url) -> eyre::Result<FetchResult> {
 
 fn process_item(
     config: &FeedConfig,
+    selectors: &FeedSelectors,
     item: ElementRef<'_>,
-    link_selector: &str,
     base_url: &url::ParseOptions,
 ) -> eyre::Result<Item> {
-    let heading_selector = Selector::parse(&config.heading)
-        .map_err(|_| eyre!("invalid selector for heading: {}", config.heading))?;
-    let title = select_first_including_self(item, &heading_selector).ok_or_else(|| {
+    let title = select_first_including_self(item, &selectors.heading).ok_or_else(|| {
         eyre!(
             "heading selector did not match anything: {}",
             config.heading
         )
     })?;
-    let link_selector = Selector::parse(link_selector)
-        .map_err(|_| eyre!("invalid selector for link: {}", link_selector))?;
-    let link = select_first_including_self(item, &link_selector)
+    let link = select_first_including_self(item, &selectors.link)
         .ok_or_else(|| eyre!("link selector did not match anything"))?;
     // Keep the previous global href-rewrite behaviour without mutating the DOM.
     let link_url = link
@@ -216,8 +269,8 @@ fn process_item(
         .map(|href| rewrite_href_value(href, base_url))
         .ok_or_else(|| eyre!("element selected as link has no 'href' attribute"))?;
     let title_text = link_text(&title);
-    let description = extract_description(config, &item, &title_text, base_url)?;
-    let date = extract_pub_date(config, &item)?;
+    let description = extract_description(selectors, &item, base_url)?;
+    let date = extract_pub_date(config, selectors, &item)?;
     let guid = GuidBuilder::default()
         .value(&link_url)
         .permalink(false)
@@ -232,11 +285,9 @@ fn process_item(
         .description(description);
 
     // Media enclosure
-    if let Some(media_selector) = &config.media {
-        debug!("checking for media matching {media_selector}");
-        let media_selector = Selector::parse(media_selector)
-            .map_err(|_| eyre!("invalid selector for media: {}", media_selector))?;
-        let media = select_first_including_self(item, &media_selector)
+    if let Some(media_selector) = &selectors.media {
+        debug!("checking for media matching {media_selector:?}");
+        let media = select_first_including_self(item, media_selector)
             .ok_or_else(|| eyre!("media selector did not match anything"))?;
 
         let media_url = media
@@ -324,19 +375,17 @@ fn add_headers(
 
 fn extract_pub_date(
     config: &FeedConfig,
+    selectors: &FeedSelectors,
     item: &ElementRef<'_>,
 ) -> eyre::Result<Option<OffsetDateTime>> {
-    config
-        .date
-        .as_ref()
-        .map(|date| {
-            let date_selector = Selector::parse(date.selector())
-                .map_err(|_| eyre!("invalid selector for date: {}", date.selector()))?;
-            Ok(select_first_including_self(*item, &date_selector)
-                .and_then(|node| parse_date(date, &node)))
-        })
-        .transpose()
-        .map(Option::flatten)
+    match (config.date.as_ref(), selectors.date.as_ref()) {
+        (Some(date), Some(date_selector)) => Ok(select_first_including_self(*item, date_selector)
+            .and_then(|node| parse_date(date, &node))),
+        (None, _) => Ok(None),
+        (Some(_), None) => Err(eyre!(
+            "date config exists but compiled date selector is missing"
+        )),
+    }
 }
 
 fn parse_date(date: &DateConfig, node: &ElementRef<'_>) -> Option<OffsetDateTime> {
@@ -391,27 +440,14 @@ fn select_including_self<'a>(element: ElementRef<'a>, selector: &Selector) -> Ve
 }
 
 fn extract_description(
-    config: &FeedConfig,
+    selectors: &FeedSelectors,
     item: &ElementRef<'_>,
-    title: &str,
     base_url: &url::ParseOptions,
 ) -> eyre::Result<Option<String>> {
     let mut description = String::new();
 
-    for selector in &config.summary {
-        let selector = Selector::parse(selector)
-            .map_err(|_| {
-                warn!(
-                    "summary selector '{selector}' for item with title '{}' is invalid",
-                    title.trim()
-                );
-            })
-            .ok();
-        let Some(selector) = selector else {
-            continue;
-        };
-
-        for node in select_including_self(*item, &selector) {
+    for selector in &selectors.summary {
+        for node in select_including_self(*item, selector) {
             description.push_str(&rewrite_hrefs_in_html(&node.html(), base_url)?);
         }
     }
@@ -579,14 +615,16 @@ mod tests {
         let item_selector = Selector::parse("article.post").unwrap();
         let item = doc.select(&item_selector).next().unwrap();
         let config = FeedConfig {
+            item: "article.post".to_string(),
             heading: "h2".to_string(),
             link: Some("a".to_string()),
             ..test_config()
         };
         let base_url = "http://example.com".parse().unwrap();
         let base = Url::options().base_url(Some(&base_url));
+        let selectors = FeedSelectors::from_config(&config).unwrap();
 
-        let rss_item = process_item(&config, item, "a", &base).unwrap();
+        let rss_item = process_item(&config, &selectors, item, &base).unwrap();
 
         assert_eq!(rss_item.link.as_deref(), Some("http://example.com/post/1"));
         assert_eq!(
@@ -602,13 +640,16 @@ mod tests {
         let item_selector = Selector::parse(".item").unwrap();
         let item = doc.select(&item_selector).next().unwrap();
         let config = FeedConfig {
+            item: ".item".to_string(),
+            heading: ".summary".to_string(),
             summary: vec![".summary".to_string()],
             ..test_config()
         };
+        let selectors = FeedSelectors::from_config(&config).unwrap();
         let base_url = "http://example.com".parse().unwrap();
         let base = Url::options().base_url(Some(&base_url));
 
-        let description = extract_description(&config, &item, "title", &base)
+        let description = extract_description(&selectors, &item, &base)
             .unwrap()
             .unwrap();
 
@@ -625,13 +666,16 @@ mod tests {
         let item_selector = Selector::parse(".item").unwrap();
         let item = doc.select(&item_selector).next().unwrap();
         let config = FeedConfig {
+            item: ".item".to_string(),
+            heading: ".summary".to_string(),
             summary: vec![".summary".to_string()],
             ..test_config()
         };
+        let selectors = FeedSelectors::from_config(&config).unwrap();
         let base_url = "http://example.com".parse().unwrap();
         let base = Url::options().base_url(Some(&base_url));
 
-        let description = extract_description(&config, &item, "title", &base)
+        let description = extract_description(&selectors, &item, &base)
             .unwrap()
             .unwrap();
 
@@ -660,13 +704,16 @@ mod tests {
         let item_selector = Selector::parse(".item").unwrap();
         let item = doc.select(&item_selector).next().unwrap();
         let config = FeedConfig {
+            item: ".item".to_string(),
+            heading: "p".to_string(),
             summary: vec!["span, p".to_string()],
             ..test_config()
         };
+        let selectors = FeedSelectors::from_config(&config).unwrap();
         let base_url = "http://example.com".parse().unwrap();
         let base = Url::options().base_url(Some(&base_url));
 
-        let description = extract_description(&config, &item, "title", &base)
+        let description = extract_description(&selectors, &item, &base)
             .unwrap()
             .unwrap();
 
@@ -682,13 +729,16 @@ mod tests {
         let item_selector = Selector::parse(".item").unwrap();
         let item = doc.select(&item_selector).next().unwrap();
         let config = FeedConfig {
+            item: ".item".to_string(),
+            heading: "p".to_string(),
             summary: vec!["span".to_string(), "p".to_string()],
             ..test_config()
         };
+        let selectors = FeedSelectors::from_config(&config).unwrap();
         let base_url = "http://example.com".parse().unwrap();
         let base = Url::options().base_url(Some(&base_url));
 
-        let description = extract_description(&config, &item, "title", &base)
+        let description = extract_description(&selectors, &item, &base)
             .unwrap()
             .unwrap();
 
