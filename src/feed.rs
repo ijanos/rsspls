@@ -134,6 +134,22 @@ pub async fn process_feed(
         }
     }
 
+    if let Some(min_items) = config.min_items {
+        if min_items == 0 {
+            warn!(
+                "min_items is set to 0 for {} that always passes (created items: {})",
+                config.url,
+                items.len()
+            );
+        } else if items.len() < min_items {
+            return Err(eyre!(
+                "feed produced fewer items than configured threshold (created items: {}, configured threshold: {})",
+                items.len(),
+                min_items
+            ));
+        }
+    }
+
     let channel = ChannelBuilder::default()
         .title(&channel_config.title)
         .link(url.to_string())
@@ -499,6 +515,7 @@ mod tests {
             summary: Vec::new(),
             date: None,
             media: None,
+            min_items: None,
         }
     }
 
@@ -929,5 +946,230 @@ mod tests {
             err.to_string()
                 .contains("file URLs are not enabled in config")
         );
+    }
+
+    #[test]
+    fn test_min_items_succeeds_when_item_count_meets_threshold() {
+        let html_file_name = format!("rsspls.min-items-ok.{}.html", process::id());
+        let local_html = RmOnDrop::new(env::temp_dir().join(&html_file_name));
+        fs::write(local_html.path(), HTML.as_bytes()).expect("unable to write test HTML");
+
+        let url = Url::from_file_path(local_html.path())
+            .expect("unable to construct file URL for test HTML");
+
+        let client = Client {
+            file_urls: true,
+            http: HttpClient::new(),
+        };
+
+        let config = FeedConfig {
+            url: url.to_string(),
+            item: "nav a".to_string(),
+            heading: "a".to_string(),
+            min_items: Some(5),
+            ..test_config()
+        };
+        let channel_config = ChannelConfig {
+            title: "Local Site".to_string(),
+            filename: Path::new(&html_file_name)
+                .with_extension("rss")
+                .to_string_lossy()
+                .into_owned(),
+            user_agent: None,
+            post_update_hook: None,
+            config,
+        };
+        let config_hash = ConfigHash(&html_file_name);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = runtime
+            .block_on(process_feed(&client, &channel_config, config_hash, None))
+            .expect("feed should meet min_items threshold");
+
+        let ProcessResult::Ok { channel, .. } = res else {
+            panic!("expected ProcessResult::Ok but got: {res:?}")
+        };
+
+        assert_eq!(channel.items().len(), 5);
+    }
+
+    #[test]
+    fn test_min_items_fails_when_item_count_below_threshold() {
+        let html_file_name = format!("rsspls.min-items-fail.{}.html", process::id());
+        let local_html = RmOnDrop::new(env::temp_dir().join(&html_file_name));
+        fs::write(local_html.path(), HTML.as_bytes()).expect("unable to write test HTML");
+
+        let url = Url::from_file_path(local_html.path())
+            .expect("unable to construct file URL for test HTML");
+
+        let client = Client {
+            file_urls: true,
+            http: HttpClient::new(),
+        };
+
+        let config = FeedConfig {
+            url: url.to_string(),
+            item: "nav a".to_string(),
+            heading: "a".to_string(),
+            min_items: Some(6),
+            ..test_config()
+        };
+        let channel_config = ChannelConfig {
+            title: "Local Site".to_string(),
+            filename: Path::new(&html_file_name)
+                .with_extension("rss")
+                .to_string_lossy()
+                .into_owned(),
+            user_agent: None,
+            post_update_hook: None,
+            config,
+        };
+        let config_hash = ConfigHash(&html_file_name);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = runtime.block_on(process_feed(&client, &channel_config, config_hash, None));
+
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_min_items_one_fails_on_zero_items() {
+        let html = "<html><body><p>no matching items here</p></body></html>";
+        let html_file_name = format!("rsspls.min-items-zero.{}.html", process::id());
+        let local_html = RmOnDrop::new(env::temp_dir().join(&html_file_name));
+        fs::write(local_html.path(), html.as_bytes()).expect("unable to write test HTML");
+
+        let url = Url::from_file_path(local_html.path())
+            .expect("unable to construct file URL for test HTML");
+
+        let client = Client {
+            file_urls: true,
+            http: HttpClient::new(),
+        };
+
+        let config = FeedConfig {
+            url: url.to_string(),
+            item: "article.post".to_string(),
+            heading: "h2".to_string(),
+            min_items: Some(1),
+            ..test_config()
+        };
+        let channel_config = ChannelConfig {
+            title: "Local Site".to_string(),
+            filename: Path::new(&html_file_name)
+                .with_extension("rss")
+                .to_string_lossy()
+                .into_owned(),
+            user_agent: None,
+            post_update_hook: None,
+            config,
+        };
+        let config_hash = ConfigHash(&html_file_name);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = runtime.block_on(process_feed(&client, &channel_config, config_hash, None));
+
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_min_items_counts_only_successfully_created_items() {
+        let html = r#"<html><body>
+            <article class="post"><h2><a href="/ok-1">OK 1</a></h2></article>
+            <article class="post"><h2>Broken (no link)</h2></article>
+            <article class="post"><h2><a href="/ok-2">OK 2</a></h2></article>
+        </body></html>"#;
+        let html_file_name = format!("rsspls.min-items-partial.{}.html", process::id());
+        let local_html = RmOnDrop::new(env::temp_dir().join(&html_file_name));
+        fs::write(local_html.path(), html.as_bytes()).expect("unable to write test HTML");
+
+        let url = Url::from_file_path(local_html.path())
+            .expect("unable to construct file URL for test HTML");
+
+        let client = Client {
+            file_urls: true,
+            http: HttpClient::new(),
+        };
+
+        let config = FeedConfig {
+            url: url.to_string(),
+            item: "article.post".to_string(),
+            heading: "h2".to_string(),
+            link: Some("a".to_string()),
+            min_items: Some(3),
+            ..test_config()
+        };
+        let channel_config = ChannelConfig {
+            title: "Local Site".to_string(),
+            filename: Path::new(&html_file_name)
+                .with_extension("rss")
+                .to_string_lossy()
+                .into_owned(),
+            user_agent: None,
+            post_update_hook: None,
+            config,
+        };
+        let config_hash = ConfigHash(&html_file_name);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = runtime.block_on(process_feed(&client, &channel_config, config_hash, None));
+
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_min_items_zero_is_allowed() {
+        let html = "<html><body><p>no matching items here</p></body></html>";
+        let html_file_name = format!("rsspls.min-items-zero-allowed.{}.html", process::id());
+        let local_html = RmOnDrop::new(env::temp_dir().join(&html_file_name));
+        fs::write(local_html.path(), html.as_bytes()).expect("unable to write test HTML");
+
+        let url = Url::from_file_path(local_html.path())
+            .expect("unable to construct file URL for test HTML");
+
+        let client = Client {
+            file_urls: true,
+            http: HttpClient::new(),
+        };
+
+        let config = FeedConfig {
+            url: url.to_string(),
+            item: "article.post".to_string(),
+            heading: "h2".to_string(),
+            min_items: Some(0),
+            ..test_config()
+        };
+        let channel_config = ChannelConfig {
+            title: "Local Site".to_string(),
+            filename: Path::new(&html_file_name)
+                .with_extension("rss")
+                .to_string_lossy()
+                .into_owned(),
+            user_agent: None,
+            post_update_hook: None,
+            config,
+        };
+        let config_hash = ConfigHash(&html_file_name);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let res = runtime
+            .block_on(process_feed(&client, &channel_config, config_hash, None))
+            .expect("min_items = 0 should not fail");
+
+        let ProcessResult::Ok { channel, .. } = res else {
+            panic!("expected ProcessResult::Ok but got: {res:?}")
+        };
+
+        assert_eq!(channel.items().len(), 0);
     }
 }

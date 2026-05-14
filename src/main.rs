@@ -386,6 +386,7 @@ mod tests {
                 summary: vec![],
                 date: None,
                 media: None,
+                min_items: None,
             },
         };
 

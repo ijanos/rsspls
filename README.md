@@ -10,7 +10,7 @@
 - [x] use default link selector `a[href], area[href]`
 - [ ] Support parsing JSON endpoints with JSONPath
 - [ ] combine multiple sources into one feed
-- [ ] maybe make feeds with zero items error out?
+- [x] maybe make feeds with zero items error out?
 
 ## Container build
 
@@ -75,6 +75,28 @@ news visit the [RSS Please website][website].
 <div align="center">
   <a href="https://rsspls.7bit.org/"><img src="visit-website.png" width="198" alt="Visit Website"></a>
 </div>
+
+Per-feed minimum item threshold
+-------------------------------
+
+You can require a feed to produce at least a certain number of successfully created items.
+Set `min_items` inside `[feed.config]`:
+
+```rsspls/README.md#L1-8
+[[feed]]
+title = "Example"
+filename = "example.xml"
+
+[feed.config]
+url = "https://example.com/posts"
+item = "article.post"
+heading = "h2"
+min_items = 1
+```
+
+If `min_items` is set and fewer than that many items are created, that feed fails.
+This helps catch page-layout changes that would otherwise silently produce an empty feed.
+`min_items = 0` is allowed and logs a warning.
 
 Build From Source
 -----------------

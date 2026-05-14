@@ -64,6 +64,7 @@ pub struct FeedConfig {
     #[serde(default, deserialize_with = "opt_string_or_struct")]
     pub date: Option<DateConfig>,
     pub media: Option<String>,
+    pub min_items: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -444,5 +445,75 @@ mod tests {
         let feed = config.feed.into_iter().next().unwrap();
 
         assert_eq!(feed.post_update_hook, Some(vec![]));
+    }
+
+    #[test]
+    fn test_feed_min_items_parses_when_present() {
+        let config = read_config_from_toml(
+            r#"
+            [rsspls]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+
+            [feed.config]
+            url = "https://example.com"
+            item = "article"
+            heading = "h1"
+            min_items = 2
+            "#,
+        );
+
+        let feed = config.feed.into_iter().next().unwrap();
+        assert_eq!(feed.config.min_items, Some(2));
+    }
+
+    #[test]
+    fn test_feed_min_items_defaults_to_none_when_absent() {
+        let config = read_config_from_toml(
+            r#"
+            [rsspls]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+
+            [feed.config]
+            url = "https://example.com"
+            item = "article"
+            heading = "h1"
+            "#,
+        );
+
+        let feed = config.feed.into_iter().next().unwrap();
+        assert_eq!(feed.config.min_items, None);
+    }
+
+    #[test]
+    fn test_feed_min_items_negative_is_invalid() {
+        let id = NEXT_TEMP_CONFIG_ID.fetch_add(1, Ordering::Relaxed);
+        let path =
+            env::temp_dir().join(format!("rsspls-config-test-{}-{}.toml", process::id(), id));
+
+        let toml = r#"
+            [rsspls]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+
+            [feed.config]
+            url = "https://example.com"
+            item = "article"
+            heading = "h1"
+            min_items = -1
+        "#;
+
+        fs::write(&path, toml).unwrap();
+        let res = Config::read(Some(path.clone()));
+        fs::remove_file(path).unwrap();
+
+        assert!(res.is_err());
     }
 }
