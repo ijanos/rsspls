@@ -133,6 +133,23 @@ link = ".url"
 summary = [".summary", ".meta"]
 ```
 
+### Lobsters Rust posts with score >= 15
+
+```
+[[feed]]
+title = "Lobsters Rust (score >= 15)"
+filename = "lobsters-rust.rss"
+
+[feed.config]
+source = "json"
+url = "https://lobste.rs/t/rust.json"
+item = ".[] | select(.score >= 15)"
+heading = ".title"
+link = ".url"
+summary = [".description_plain", '"Score: \(.score) | Comments: \(.comment_count) | Tags: \(.tags | join(", ")) "', ".comments_url"]
+date = ".created_at"
+```
+
 ### USGS significant earthquakes of the week feed
 
 ```
