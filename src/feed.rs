@@ -1,6 +1,11 @@
 use std::fs;
 
 use basic_toml as toml;
+use jaq_all::{
+    data::{self as jaq_data, Filter as JaqFilter, Runner as JaqRunner},
+    jaq_core::Vars,
+    json::{Val as JaqVal, read as jaq_read},
+};
 use log::{debug, error, info, warn};
 use lol_html::{RewriteStrSettings, element, rewrite_str};
 use mime_guess::mime;
@@ -16,7 +21,7 @@ use url::Url;
 
 use crate::Client;
 use crate::cache::RequestCacheWrite;
-use crate::config::{ChannelConfig, ConfigHash, DateConfig, FeedConfig};
+use crate::config::{ChannelConfig, ConfigHash, DateConfig, FeedConfig, FeedSource};
 
 const DEFAULT_LINK_SELECTOR: &str = "a[href], area[href]";
 
@@ -32,7 +37,7 @@ pub enum ProcessResult {
 pub enum FetchResult {
     NotModified,
     Ok {
-        html: String,
+        body: String,
         headers: Option<String>,
     },
 }
@@ -45,6 +50,15 @@ struct FeedSelectors {
     summary: Vec<Selector>,
     date: Option<Selector>,
     media: Option<Selector>,
+}
+
+struct JsonFeedFilters {
+    item: JaqFilter,
+    heading: JaqFilter,
+    link: JaqFilter,
+    summary: Vec<JaqFilter>,
+    date: Option<JaqFilter>,
+    media: Option<JaqFilter>,
 }
 
 impl FeedSelectors {
@@ -96,6 +110,38 @@ impl FeedSelectors {
     }
 }
 
+impl JsonFeedFilters {
+    fn from_config(config: &FeedConfig) -> eyre::Result<Self> {
+        let link_raw = config
+            .link
+            .as_deref()
+            .ok_or_else(|| eyre!("json feeds require a link filter"))?;
+
+        let summary = config
+            .summary
+            .iter()
+            .map(|filter| compile_jaq_filter("summary", filter))
+            .collect::<eyre::Result<Vec<_>>>()?;
+
+        Ok(Self {
+            item: compile_jaq_filter("item", &config.item)?,
+            heading: compile_jaq_filter("heading", &config.heading)?,
+            link: compile_jaq_filter("link", link_raw)?,
+            summary,
+            date: config
+                .date
+                .as_ref()
+                .map(|date| compile_jaq_filter("date", date.selector()))
+                .transpose()?,
+            media: config
+                .media
+                .as_deref()
+                .map(|filter| compile_jaq_filter("media", filter))
+                .transpose()?,
+        })
+    }
+}
+
 pub async fn process_feed(
     client: &Client,
     channel_config: &ChannelConfig,
@@ -109,30 +155,16 @@ pub async fn process_feed(
         .parse()
         .wrap_err_with(|| format!("unable to parse {} as a URL", config.url))?;
 
-    let (html, serialised_headers) =
+    let (body, serialised_headers) =
         match fetch_webpage(client, &url, cached_headers, channel_config, config_hash).await? {
-            FetchResult::Ok { html, headers } => (html, headers),
+            FetchResult::Ok { body, headers } => (body, headers),
             FetchResult::NotModified => return Ok(ProcessResult::NotModified),
         };
 
-    let selectors = FeedSelectors::from_config(config)?;
-
-    let doc = Html::parse_document(&html);
-    let base_url = Url::options().base_url(Some(&url));
-
-    let mut items = Vec::new();
-    for item in doc.select(&selectors.item) {
-        match process_item(config, &selectors, item, &base_url) {
-            Ok(rss_item) => items.push(rss_item),
-            Err(err) => {
-                let report = err.wrap_err(format!(
-                    "unable to process RSS item matching '{}'",
-                    config.item
-                ));
-                error!("{report:?}");
-            }
-        }
-    }
+    let items = match config.source {
+        FeedSource::Html => process_html_feed(config, &body, &url)?,
+        FeedSource::Json => process_json_feed(config, &body, &url)?,
+    };
 
     if let Some(min_items) = config.min_items {
         if min_items == 0 {
@@ -161,6 +193,78 @@ pub async fn process_feed(
         channel: Box::new(channel),
         headers: serialised_headers,
     })
+}
+
+fn process_html_feed(config: &FeedConfig, body: &str, url: &Url) -> eyre::Result<Vec<Item>> {
+    let selectors = FeedSelectors::from_config(config)?;
+    let doc = Html::parse_document(body);
+    let base_url = Url::options().base_url(Some(url));
+
+    let mut items = Vec::new();
+    for item in doc.select(&selectors.item) {
+        match process_item(config, &selectors, item, &base_url) {
+            Ok(rss_item) => items.push(rss_item),
+            Err(err) => {
+                let report = err.wrap_err(format!(
+                    "unable to process RSS item matching '{}'",
+                    config.item
+                ));
+                error!("{report:?}");
+            }
+        }
+    }
+
+    Ok(items)
+}
+
+fn process_json_feed(config: &FeedConfig, body: &str, url: &Url) -> eyre::Result<Vec<Item>> {
+    let filters = JsonFeedFilters::from_config(config)?;
+    let doc = jaq_read::parse_single(body.as_bytes())
+        .wrap_err("unable to parse response body as JSON")?;
+    let base_url = Url::options().base_url(Some(url));
+
+    let mut items = Vec::new();
+    for item in run_jaq_filter(&filters.item, doc)? {
+        match process_json_item(config, &filters, &item, &base_url) {
+            Ok(rss_item) => items.push(rss_item),
+            Err(err) => {
+                let report = err.wrap_err(format!(
+                    "unable to process RSS item matching '{}'",
+                    config.item
+                ));
+                error!("{report:?}");
+            }
+        }
+    }
+
+    Ok(items)
+}
+
+fn compile_jaq_filter(field_name: &str, filter: &str) -> eyre::Result<JaqFilter> {
+    jaq_data::compile(filter)
+        .map_err(|reports| eyre!("invalid jaq filter for {field_name}: {filter}\n{reports:?}"))
+}
+
+fn run_jaq_filter(filter: &JaqFilter, input: JaqVal) -> eyre::Result<Vec<JaqVal>> {
+    let mut outputs = Vec::new();
+    let runner = JaqRunner::default();
+
+    jaq_data::run(
+        &runner,
+        filter,
+        Vars::new([]),
+        std::iter::once(Ok::<JaqVal, String>(input)),
+        |err| eyre!("unable to supply jaq input: {err}"),
+        |output| match output {
+            Ok(value) => {
+                outputs.push(value);
+                Ok(())
+            }
+            Err(err) => Err(eyre!("error running jaq filter: {err}")),
+        },
+    )?;
+
+    Ok(outputs)
 }
 
 async fn fetch_webpage(
@@ -218,7 +322,7 @@ async fn fetch_webpage_http(
         ));
     }
 
-    if config.link.is_none() {
+    if matches!(config.source, FeedSource::Html) && config.link.is_none() {
         info!(
             "no explicit link selector provided, using default link selector: {DEFAULT_LINK_SELECTOR}",
         );
@@ -240,10 +344,10 @@ async fn fetch_webpage_http(
         .ok();
 
     // Read body
-    let html = resp.text().await.wrap_err("unable to read response body")?;
+    let body = resp.text().await.wrap_err("unable to read response body")?;
 
     Ok(FetchResult::Ok {
-        html,
+        body,
         headers: serialised_headers,
     })
 }
@@ -253,14 +357,14 @@ async fn fetch_webpage_local(url: &Url) -> eyre::Result<FetchResult> {
         .to_file_path()
         .map_err(|()| eyre!("unable to extract path from: {}", url))?;
     debug!("read {}", path.display());
-    let html = task::spawn_blocking(move || {
+    let body = task::spawn_blocking(move || {
         fs::read_to_string(&path).wrap_err_with(|| format!("error reading {}", path.display()))
     })
     .await
     .wrap_err_with(|| format!("error joining task for {url}"))??;
 
     Ok(FetchResult::Ok {
-        html,
+        body,
         headers: None,
     })
 }
@@ -330,12 +434,135 @@ fn process_item(
         enclosure_bld.mime_type(media_mime_type.to_string());
         // "When an enclosure's size cannot be determined, a publisher should use a length of 0."
         // https://www.rssboard.org/rss-profile#element-channel-item-enclosure
-        enclosure_bld.length("0".to_string());
+        enclosure_bld.length("0");
 
         rss_item_builder.enclosure(Some(enclosure_bld.build()));
     }
 
     Ok(rss_item_builder.build())
+}
+
+fn process_json_item(
+    config: &FeedConfig,
+    filters: &JsonFeedFilters,
+    item: &JaqVal,
+    base_url: &url::ParseOptions,
+) -> eyre::Result<Item> {
+    let title_text = extract_json_required_text("heading", &filters.heading, item)?;
+    let link_text = extract_json_required_text("link", &filters.link, item)?;
+    let link_url = rewrite_href_value(&link_text, base_url);
+    let description = extract_json_description(filters, item)?;
+    let date = extract_json_pub_date(config, filters, item)?;
+    let guid = GuidBuilder::default()
+        .value(&link_url)
+        .permalink(false)
+        .build();
+
+    let mut rss_item_builder = ItemBuilder::default();
+    rss_item_builder
+        .title(title_text)
+        .link(base_url.parse(&link_url).ok().map(|u| u.to_string()))
+        .guid(Some(guid))
+        .pub_date(date.map(|date| date.format(&Rfc2822).unwrap()))
+        .description(description);
+
+    if let Some(media_filter) = &filters.media {
+        let media_url = extract_json_required_text("media", media_filter, item)?;
+        let parsed_url = base_url
+            .parse(&media_url)
+            .map_err(|e| eyre!("media enclosure url invalid: {e}"))?;
+
+        #[expect(clippy::map_unwrap_or)]
+        let media_mime_type = parsed_url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .map(|media_filename| mime_guess::from_path(media_filename).first_or_octet_stream())
+            .unwrap_or_else(|| mime::APPLICATION_OCTET_STREAM);
+
+        let mut enclosure_bld = EnclosureBuilder::default();
+        enclosure_bld.url(parsed_url.to_string());
+        enclosure_bld.mime_type(media_mime_type.to_string());
+        enclosure_bld.length("0");
+
+        rss_item_builder.enclosure(Some(enclosure_bld.build()));
+    }
+
+    Ok(rss_item_builder.build())
+}
+
+fn extract_json_required_text(
+    field_name: &str,
+    filter: &JaqFilter,
+    item: &JaqVal,
+) -> eyre::Result<String> {
+    extract_json_single_value(field_name, filter, item)?
+        .map(|value| json_value_to_text(&value))
+        .ok_or_else(|| eyre!("{field_name} filter did not match anything"))
+}
+
+fn extract_json_single_value(
+    field_name: &str,
+    filter: &JaqFilter,
+    item: &JaqVal,
+) -> eyre::Result<Option<JaqVal>> {
+    let mut values = run_jaq_filter(filter, item.clone())?.into_iter();
+    let first = values.next();
+    if values.next().is_some() {
+        return Err(eyre!("{field_name} filter returned multiple values"));
+    }
+    Ok(first)
+}
+
+fn extract_json_description(
+    filters: &JsonFeedFilters,
+    item: &JaqVal,
+) -> eyre::Result<Option<String>> {
+    let mut description = String::new();
+
+    for filter in &filters.summary {
+        for value in run_jaq_filter(filter, item.clone())? {
+            description.push_str(&json_value_to_text(&value));
+        }
+    }
+
+    if description.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(description))
+    }
+}
+
+fn extract_json_pub_date(
+    config: &FeedConfig,
+    filters: &JsonFeedFilters,
+    item: &JaqVal,
+) -> eyre::Result<Option<OffsetDateTime>> {
+    match (config.date.as_ref(), filters.date.as_ref()) {
+        (Some(date), Some(date_filter)) => {
+            Ok(
+                extract_json_single_value("date", date_filter, item)?.and_then(|value| {
+                    let text = json_value_to_text(&value);
+                    let trimmed = trim_date(&text);
+                    date.parse(trimmed)
+                        .map_err(|_err| {
+                            warn!("unable to parse date '{trimmed}'");
+                        })
+                        .ok()
+                }),
+            )
+        }
+        (None, _) => Ok(None),
+        (Some(_), None) => Err(eyre!(
+            "date config exists but compiled date selector is missing"
+        )),
+    }
+}
+
+fn json_value_to_text(value: &JaqVal) -> String {
+    value.try_as_bytes_owned().map_or_else(
+        |_err| value.to_string(),
+        |bytes| String::from_utf8_lossy(bytes.as_ref()).into_owned(),
+    )
 }
 
 fn rewrite_href_value(href: &str, base_url: &url::ParseOptions) -> String {
@@ -485,6 +712,7 @@ mod tests {
     use reqwest::Client as HttpClient;
 
     use super::*;
+    use crate::config::FeedSource;
 
     const HTML: &str = include_str!("../tests/local.html");
 
@@ -508,6 +736,7 @@ mod tests {
 
     fn test_config() -> FeedConfig {
         FeedConfig {
+            source: FeedSource::Html,
             url: String::new(),
             item: String::new(),
             heading: String::new(),
@@ -901,6 +1130,94 @@ mod tests {
 
         assert_eq!(channel.items().len(), 5);
         assert_eq!(channel.items()[0].title, Some("Install".to_string()));
+    }
+
+    #[test]
+    fn test_process_json_feed() {
+        let json = r#"{
+            "posts": [
+                {
+                    "title": "First Post",
+                    "url": "/post/1",
+                    "summary": "Read more",
+                    "meta": {"views": 1},
+                    "published_at": "2024-03-15T09:45:00Z",
+                    "media": {"url": "/media/1.jpg"}
+                },
+                {
+                    "title": "Second Post",
+                    "url": "https://example.com/post/2",
+                    "summary": {"kind": "rich", "text": "Second summary"},
+                    "meta": [2, 3],
+                    "published_at": "2024-03-16T10:15:00Z",
+                    "media": {"url": "https://cdn.example.com/media/2.mp3"}
+                }
+            ]
+        }"#;
+
+        let url: Url = "https://example.com/api/posts".parse().unwrap();
+        let config = FeedConfig {
+            source: FeedSource::Json,
+            url: url.to_string(),
+            item: ".posts[]".to_string(),
+            heading: ".title".to_string(),
+            link: Some(".url".to_string()),
+            summary: vec![".summary".to_string(), ".meta".to_string()],
+            date: Some(test_date_with_selector(
+                ".published_at",
+                "[year]-[month]-[day]T[hour]:[minute]:[second]Z",
+            )),
+            media: Some(".media.url".to_string()),
+            min_items: None,
+        };
+
+        let items = process_json_feed(&config, json, &url).unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title.as_deref(), Some("First Post"));
+        assert_eq!(items[0].link.as_deref(), Some("https://example.com/post/1"));
+        assert_eq!(
+            items[0].guid.as_ref().map(rss::Guid::value),
+            Some("https://example.com/post/1")
+        );
+        assert_eq!(
+            items[0].description.as_deref(),
+            Some("Read more{\"views\":1}")
+        );
+        assert_eq!(
+            items[0].pub_date.as_deref(),
+            Some("Fri, 15 Mar 2024 09:45:00 +0000")
+        );
+        assert_eq!(
+            items[0].enclosure.as_ref().map(rss::Enclosure::url),
+            Some("https://example.com/media/1.jpg")
+        );
+
+        assert_eq!(items[1].title.as_deref(), Some("Second Post"));
+        assert_eq!(items[1].link.as_deref(), Some("https://example.com/post/2"));
+        assert_eq!(
+            items[1].description.as_deref(),
+            Some("{\"kind\":\"rich\",\"text\":\"Second summary\"}[2,3]")
+        );
+        assert_eq!(
+            items[1].enclosure.as_ref().map(rss::Enclosure::url),
+            Some("https://cdn.example.com/media/2.mp3")
+        );
+    }
+
+    #[test]
+    fn test_json_filters_require_link() {
+        let config = FeedConfig {
+            source: FeedSource::Json,
+            url: "https://example.com/api/posts".to_string(),
+            item: ".posts[]".to_string(),
+            heading: ".title".to_string(),
+            link: None,
+            ..test_config()
+        };
+
+        let err = JsonFeedFilters::from_config(&config).err().unwrap();
+        assert!(err.to_string().contains("json feeds require a link filter"));
     }
 
     #[test]

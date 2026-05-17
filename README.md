@@ -8,9 +8,10 @@
 - [x] create a container to easier deploys
 - [x] try to match selector on the root item first (rsspls can only match on children)
 - [x] use default link selector `a[href], area[href]`
-- [ ] Support parsing JSON endpoints with JSONPath
+- [x] make feeds with zero items error out (configurable)
+- [x] Support parsing JSON endpoints with jaq filters
 - [ ] combine multiple sources into one feed
-- [x] maybe make feeds with zero items error out?
+
 
 ## Container build
 
@@ -97,6 +98,60 @@ min_items = 1
 If `min_items` is set and fewer than that many items are created, that feed fails.
 This helps catch page-layout changes that would otherwise silently produce an empty feed.
 `min_items = 0` is allowed and logs a warning.
+
+JSON API feeds
+--------------
+
+`rsspls` can also generate RSS from JSON API endpoints using jq-like `jaq` filters.
+Set `source = "json"` inside `[feed.config]` and use explicit iteration in `item` such as
+`.items[]`.
+
+For JSON feeds:
+
+- `item` runs against the whole JSON document.
+- `heading`, `link`, `summary`, `date.selector`, and `media` run against each item.
+- `link` is required.
+- `item` uses explicit iteration, so prefer `.items[]` over `.items`.
+- Non-string values are serialized as JSON text.
+
+JSON API examples
+-----------------
+
+### Generic JSON API
+
+```
+[[feed]]
+title = "Example API"
+filename = "example-api.xml"
+
+[feed.config]
+source = "json"
+url = "https://example.com/api/posts"
+item = ".posts[]"
+heading = ".title"
+link = ".url"
+summary = [".summary", ".meta"]
+```
+
+### USGS significant earthquakes of the week feed
+
+```
+[rsspls]
+output = "/tmp"
+
+[[feed]]
+title = "Significant Earthquakes of the Week"
+filename = "earthquakes.rss"
+
+[feed.config]
+source = "json"
+url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson"
+item = ".features[]"
+heading = ".properties.title"
+link = ".properties.url"
+summary = [".properties.title"]
+date = ".properties.time"
+```
 
 Build From Source
 -----------------

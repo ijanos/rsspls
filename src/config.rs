@@ -55,6 +55,8 @@ pub struct ChannelConfig {
 // TODO: Rename?
 #[derive(Debug, Deserialize)]
 pub struct FeedConfig {
+    #[serde(default)]
+    pub source: FeedSource,
     pub url: String,
     pub item: String,
     pub heading: String,
@@ -74,6 +76,14 @@ pub struct DateConfig {
     type_: DateType,
     #[serde(deserialize_with = "deserialize_format")]
     pub format: Option<OwnedFormatItem>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Copy, Clone, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum FeedSource {
+    #[default]
+    Html,
+    Json,
 }
 
 #[derive(Debug, Default, Deserialize, Copy, Clone)]
@@ -368,6 +378,50 @@ mod tests {
             .parse("Friday, January 8th, 2021 12:13pm").is_ok());
         assert!(test_date("[weekday case_sensitive:false], [month repr:long case_sensitive:false] [day padding:none], [year] [hour repr:24]:[minute]")
             .parse("Friday, January 8, 2021 21:33").is_ok());
+    }
+
+    #[test]
+    fn test_feed_source_defaults_to_html() {
+        let config = read_config_from_toml(
+            r#"
+            [rsspls]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+
+            [feed.config]
+            url = "https://example.com"
+            item = "article"
+            heading = "h1"
+            "#,
+        );
+
+        let feed = config.feed.into_iter().next().unwrap();
+        assert_eq!(feed.config.source, FeedSource::Html);
+    }
+
+    #[test]
+    fn test_feed_source_parses_json() {
+        let config = read_config_from_toml(
+            r#"
+            [rsspls]
+
+            [[feed]]
+            title = "Example"
+            filename = "example.xml"
+
+            [feed.config]
+            source = "json"
+            url = "https://example.com/api"
+            item = ".items[]"
+            heading = ".title"
+            link = ".url"
+            "#,
+        );
+
+        let feed = config.feed.into_iter().next().unwrap();
+        assert_eq!(feed.config.source, FeedSource::Json);
     }
 
     #[test]

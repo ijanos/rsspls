@@ -379,6 +379,7 @@ mod tests {
             user_agent: None,
             post_update_hook: Some(hook),
             config: crate::config::FeedConfig {
+                source: crate::config::FeedSource::Html,
                 url: url::Url::from_file_path(&html).unwrap().into(),
                 item: "h2".into(),
                 heading: "h2".into(),
