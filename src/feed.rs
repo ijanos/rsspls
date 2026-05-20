@@ -517,18 +517,21 @@ fn extract_json_description(
     filters: &JsonFeedFilters,
     item: &JaqVal,
 ) -> eyre::Result<Option<String>> {
-    let mut description = String::new();
+    let mut parts = Vec::new();
 
     for filter in &filters.summary {
         for value in run_jaq_filter(filter, item.clone())? {
-            description.push_str(&json_value_to_text(&value));
+            let text = json_value_to_text(&value);
+            if !text.is_empty() {
+                parts.push(text);
+            }
         }
     }
 
-    if description.is_empty() {
+    if parts.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(description))
+        Ok(Some(parts.join("<br>\n")))
     }
 }
 
@@ -1182,7 +1185,7 @@ mod tests {
         );
         assert_eq!(
             items[0].description.as_deref(),
-            Some("Read more{\"views\":1}")
+            Some("Read more<br>\n{\"views\":1}")
         );
         assert_eq!(
             items[0].pub_date.as_deref(),
@@ -1197,7 +1200,7 @@ mod tests {
         assert_eq!(items[1].link.as_deref(), Some("https://example.com/post/2"));
         assert_eq!(
             items[1].description.as_deref(),
-            Some("{\"kind\":\"rich\",\"text\":\"Second summary\"}[2,3]")
+            Some("{\"kind\":\"rich\",\"text\":\"Second summary\"}<br>\n[2,3]")
         );
         assert_eq!(
             items[1].enclosure.as_ref().map(rss::Enclosure::url),
